@@ -1,5 +1,5 @@
-name: "Bug report \U0001F41B"
-description: "Create a report to help us improve"
+name: "Bug report 🐛"
+description: "Is something not working as expected?"
 title: "[BUG] - <title>"
 labels: ["type: bug 🐛"]
 

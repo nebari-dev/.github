@@ -1,15 +1,10 @@
 ---
-name: "Documentation \U0001F516"
+name: "Documentation 📖"
 about: Issues and feedback related to the docs.
 title: "[DOC] - <title>"
-labels: ["type: documentation"]
-
+labels: ["area: documentation 📖"]
 ---
 
-:warning: This form is for reporting issues and proving feedback about the documentation ONLY.
+:warning: This issue template is for reporting issues and proving feedback about the documentation only.
 
-**We are currently organising our docs and would appreciate any feedback, suggestions or painpoint report from our community.
-Don't be shy, we will love to hear from you! 👂
-**
-
-Have a question instead? Head over to our [Discussion Q&A](https://github.com/Quansight/qhub/discussions/categories/q-a) page and tell us what is bothering you.
+**Our documentation is currently undergoing a major facelift and would appreciate any feedback, suggestions or pain point reports from our community.**
