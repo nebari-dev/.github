@@ -1,0 +1,21 @@
+name: Sync Issue Templates
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  sync-issue-templates:
+    name: Sync Issue templates
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Run GitHub File Sync
+        uses: BetaHuhn/repo-file-sync-action@v1
+        with:
+          GH_PAT: ${{ secrets.ACCESS_TOKEN }}
+          BRANCH_PREFIX: github

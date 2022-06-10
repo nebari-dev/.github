@@ -1,0 +1,10 @@
+# Configuration for repository issue template syncing
+# ref: https://github.com/BetaHuhn/repo-file-sync-action
+group:
+  # Our public repositories use a YML file
+  - repos: |
+      nebari-dev/nebari
+      nebari-dev/docker-images
+      nebari-dev/governance
+    files:
+      - .github/ISSUE_TEMPLATE/
