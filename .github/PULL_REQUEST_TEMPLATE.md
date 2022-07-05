@@ -4,6 +4,7 @@ the contribution guidelines: https://nebari.dev/community
 -->
 
 ## Reference Issues/PRs
+
 <!--
 Example: Fixes #1234. See also #3456.
 Please use keywords (e.g., Fixes) to create link to the issues or pull requests
@@ -30,16 +31,17 @@ _Put an `x` in the boxes that apply_
 - [ ] Did you add new tests?
 
 ## Documentation
+
 <!--
   Where is this feature or API documented?
 
   - If docs exist:
     - Update any references, if relevant. This includes Guides and Nebari Internals docs.
   - If no docs exist:
-    - Create a stub for documentation including bullet points for how to use the feature, code snippets (including from 
+    - Create a stub for documentation including bullet points for how to use the feature, code snippets (including from
       happy path tests), etc.
-We want to make sure content produced for Nebari is accessible, if you are making significant content contributions 
-please address the access-centred guidelines in your content (expand section for more details).
+We want to make sure content produced for Nebari is accessible, if you are making significant content contributions
+please address the access-centred guidelines in your content (expand the section for more details).
 -->
 
 <details>
@@ -62,6 +64,7 @@ please address the access-centred guidelines in your content (expand section for
 </details>
 
 ### Any other comments?
+
 <!--
 Please be aware that we are a loose team of volunteers so patience is
 necessary; assistance handling other issues is very welcome. We value

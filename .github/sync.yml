@@ -9,5 +9,7 @@ group:
     files:
       - source: .github/ISSUE_TEMPLATE/
         dest: .github/ISSUE_TEMPLATE/
+      - source: .github/PULL_REQUEST_TEMPLATE.md
+        dest: .github/PULL_REQUEST_TEMPLATE.md
       - source: LICENSE
         dest: LICENSE
