@@ -16,7 +16,7 @@ jobs:
       - name: Run GitHub File Sync ♻️
         uses: BetaHuhn/repo-file-sync-action@v1
         with:
-          GH_PAT: ${{ secrets.ACCESS_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
           BRANCH_PREFIX: github
           COMMIT_BODY: "MAINT - Sync .github files"
           PR_LABELS: |
