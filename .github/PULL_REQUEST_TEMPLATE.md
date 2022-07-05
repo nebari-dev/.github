@@ -68,5 +68,5 @@ necessary; assistance handling other issues is very welcome. We value
 all user contributions. If we are slow to review, either the pull request needs some benchmarking, tinkering,
 convincing, etc. or more likely the reviewers are busy. In either case, we ask for your understanding during the
 review process.
-Thanks for contributing  to Nebari🙏🏼!
+Thanks for contributing to Nebari 🙏🏼!
 -->

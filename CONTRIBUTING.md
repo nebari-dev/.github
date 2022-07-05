@@ -12,7 +12,7 @@ Continue reading to learn what the community can do for you and what you can do 
 By contributing to open source projects you can connect with people, learn new skills, become a subject-matter expert,
 and apply all learnings to your own projects.
 
-Our detailed contribution guidelines can be found [on the Nebari's main documentation site][nebari-community].
+Our detailed contribution guidelines can be found [on Nebari's main documentation site][nebari-community].
 Make sure to check the guidelines before you start contributing.
 
 <!-- Links -->

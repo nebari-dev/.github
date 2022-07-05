@@ -1,6 +1,6 @@
 # .github
 
-This is a meta repository that defines some shared files that the repositories for the repositories under the `Nebari-dev` organization.
+This is a meta repository that defines some shared files for the repositories under the `Nebari-dev` organization.
 
 ## Files in this repository
 
