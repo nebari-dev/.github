@@ -2,9 +2,9 @@
 
 This is a meta repository that defines some shared files that the repositories for the repositories under the `Nebari-dev` organization.
 
-## Files used in this repository
+## Files in this repository
 
-Below is a quick list of these files:
+Below is a quick list of what you'll find in this repository:
 
 - `.github/ISSUE_TEMPLATE/`: Issue templates for other repositories. When these files are changed, they are automatically synced to our other repositories via [this GitHub action](.github/workflows/sync-issue-templates.yaml).
 - `.github/PULL_REQUEST_TEMPLATE.md`: Pull request templates for other repositories. When these files are changed, they are automatically synced to our other repositories via [this GitHub action](.github/workflows/sync-pull-request-templates.yaml).

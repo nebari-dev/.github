@@ -18,6 +18,6 @@ jobs:
         with:
           GH_PAT: ${{ secrets.GH_PAT }}
           BRANCH_PREFIX: github
-          COMMIT_BODY: "MAINT - Sync .github files"
+          COMMIT_BODY: "MAINT - Sync .github files :robot:"
           PR_LABELS: |
             "type: file sync ♻️"
