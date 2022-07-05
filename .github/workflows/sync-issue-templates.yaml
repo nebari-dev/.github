@@ -10,12 +10,14 @@ jobs:
     name: Sync Issue templates
     runs-on: ubuntu-latest
     steps:
-
-      - name: Checkout Repository
+      - name: Checkout Repository 🛎
         uses: actions/checkout@v3
 
-      - name: Run GitHub File Sync
+      - name: Run GitHub File Sync ♻️
         uses: BetaHuhn/repo-file-sync-action@v1
         with:
           GH_PAT: ${{ secrets.ACCESS_TOKEN }}
           BRANCH_PREFIX: github
+          COMMIT_BODY: "MAINT - Sync .github files"
+          PR_LABELS: |
+            "type: file sync ♻️"
