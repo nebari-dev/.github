@@ -17,11 +17,14 @@ This repository uses the `prettier` pre-commit hook to standardize our YAML and 
 This ensures that when we sync files to other repositories, we do not create conflicts with `prettier` checks in each repository.
 To install and run it, use these commands from the repository root:
 
-```console
-$ pre-commit install
-$ pre-commit run -a
+```bash
+# install the pre-commit hooks
+pre-commit install
+
+# run the pre-commit hooks
+pre-commit run --all-files
 ```
 
 ## References
 
-- See https://help.github.com/en/articles/creating-a-default-community-health-file-for-your-organization for more details
+- See <https://help.github.com/en/articles/creating-a-default-community-health-file-for-your-organization> for more details
