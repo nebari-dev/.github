@@ -20,4 +20,4 @@ jobs:
           BRANCH_PREFIX: github
           COMMIT_BODY: "MAINT - Sync .github files :robot:"
           PR_LABELS: |
-            "type: file sync ♻️"
+            type: file sync ♻️

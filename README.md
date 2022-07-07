@@ -8,8 +8,11 @@ Below is a quick list of what you'll find in this repository:
 
 - `.github/ISSUE_TEMPLATE/`: Issue templates for other repositories. When these files are changed, they are automatically synced to our other repositories via [this GitHub action](.github/workflows/sync-issue-templates.yaml).
 - `.github/PULL_REQUEST_TEMPLATE.md`: Pull request templates for other repositories. When these files are changed, they are automatically synced to our other repositories via [this GitHub action](.github/workflows/sync-pull-request-templates.yaml).
-- `LICENSE`: All of our projects are under a BSD-3 clause license.
-- `CONTRIBUTING.md`: Base contributing guidelines for all of our projects.
+- `LICENSE`: All of our projects are under a BSD-3 clause license, this is automatically synced to our other repositories via [this GitHub action](.github/workflows/sync-pull-request-templates.yaml).
+- `CONTRIBUTING.md`: Base contributing guidelines for all of our projects, this is automatically synced to our other repositories via [this GitHub action](.github/workflows/sync-pull-request-templates.yaml).
+
+> **Warning**
+> The syncing action requires a Personal Authentication Token (PAT) which is currently set up through [Quansight-bot](https://github.com/quansight-bot)
 
 ## Pre-commit hooks
 
