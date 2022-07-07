@@ -2,7 +2,7 @@
 
 This is a meta repository that defines some shared files for the repositories under the `Nebari-dev` organization.
 
-## Files in this repository
+## :file_folder: Files in this repository
 
 Below is a quick list of what you'll find in this repository:
 
@@ -14,7 +14,7 @@ Below is a quick list of what you'll find in this repository:
 > **Warning**
 > The syncing action requires a Personal Authentication Token (PAT) which is currently set up through [Quansight-bot](https://github.com/quansight-bot)
 
-## Pre-commit hooks
+## :broom: Pre-commit hooks
 
 This repository uses the `prettier` pre-commit hook to standardize our YAML and markdown structure.
 This ensures that when we sync files to other repositories, we do not create conflicts with `prettier` checks in each repository.
@@ -28,6 +28,6 @@ pre-commit install
 pre-commit run --all-files
 ```
 
-## References
+## :link: References
 
 - See <https://help.github.com/en/articles/creating-a-default-community-health-file-for-your-organization> for more details
