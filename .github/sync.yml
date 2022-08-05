@@ -3,7 +3,7 @@
 group:
   # Our public repositories use a YML file
   - repos: |
-      nebari-dev/nebari
+      nebari-dev/nebari-docs
       nebari-dev/docker-images
       nebari-dev/governance
     files:
