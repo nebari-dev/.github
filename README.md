@@ -1,5 +1,7 @@
 # .github
 
+[![Sync Issue Templates](https://github.com/nebari-dev/.github/actions/workflows/sync-issue-templates.yaml/badge.svg)](https://github.com/nebari-dev/.github/actions/workflows/sync-issue-templates.yaml)
+
 This is a meta repository that defines some shared files for the repositories under the `Nebari-dev` organization.
 
 ## :file_folder: Files in this repository
