@@ -3,6 +3,10 @@ on:
   push:
     branches:
       - main
+    paths:
+      - ".github/*"
+      - "CONTRIBUTING.md"
+      - "LICENSE"
   workflow_dispatch:
 
 jobs:
@@ -14,7 +18,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Run GitHub File Sync ♻️
-        uses: BetaHuhn/repo-file-sync-action@v1
+        uses: BetaHuhn/repo-file-sync-action@v1.17.21
         with:
           GH_PAT: ${{ secrets.GH_PAT }}
           BRANCH_PREFIX: github
