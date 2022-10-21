@@ -6,6 +6,7 @@ group:
       nebari-dev/nebari-docs
       nebari-dev/docker-images
       nebari-dev/governance
+      nebari-dev/nebari-jupyterhub-theme
     files:
       - source: .github/ISSUE_TEMPLATE/
         dest: .github/ISSUE_TEMPLATE/
