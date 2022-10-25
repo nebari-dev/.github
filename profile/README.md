@@ -1,7 +1,7 @@
 # Welcome to Nebari! 👋
 
 <a href="https://nebari.dev">
-    <img src="nebari-banner.svg" alt="A banner showing the Nebari logo witt the tagline 'A data science platform: Built for scale, designed for collaboration.' This is followed by a get started button pointing to nebari.dev."/>
+    <img src="nebari-banner.svg" alt="A banner showing the Nebari logo with the tagline 'A data science platform: Built for scale, designed for collaboration.' This is followed by a get started button pointing to nebari.dev."/>
 </a>
 
 ---
