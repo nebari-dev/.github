@@ -63,10 +63,11 @@ please address the access-centred guidelines in your content and complete our ch
 ### Any other comments?
 
 <!--
-Please be aware that we are a loose team of volunteers, so patience is
-necessary; assistance handling other issues is very welcome. We value
-all user contributions. If we are slow to review, either the pull request needs some benchmarking, tinkering,
-convincing, etc., or the reviewers are likely busy. In either case, we ask for your understanding during the
+Please be aware that we are a loose team of volunteers, so patience is necessary;
+assistance handling other issues is very welcome.
+We value all user contributions. If we are slow to review, either the pull request needs some benchmarking, tinkering,
+convincing, etc., or the reviewers are likely busy. In either case,
+we ask for your understanding during the
 review process.
 Thanks for contributing to Nebari 🙏🏼!
 -->

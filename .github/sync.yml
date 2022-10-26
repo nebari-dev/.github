@@ -1,8 +1,9 @@
 # Configuration for repository issue template syncing
 # ref: https://github.com/BetaHuhn/repo-file-sync-action
 group:
-  # Our public repositories use a YML file
+  # files shared across all repositories
   - repos: |
+      nebari-dev/nebari
       nebari-dev/nebari-docs
       nebari-dev/docker-images
       nebari-dev/governance
@@ -10,9 +11,23 @@ group:
     files:
       - source: .github/ISSUE_TEMPLATE/
         dest: .github/ISSUE_TEMPLATE/
+        exclude: |
+          bug-report.yml
+          bug-report-nebari.yml
       - source: .github/PULL_REQUEST_TEMPLATE.md
         dest: .github/PULL_REQUEST_TEMPLATE.md
       - source: LICENSE
         dest: LICENSE
       - source: CONTRIBUTING.md
         dest: CONTRIBUTING.md
+  # finer grained bug report issues - Nebari
+  - repos: |
+      nebari-dev/nebari
+    files: .github/ISSUE_TEMPLATE/bug-report-nebari.yml
+  # general bug report
+  - repos: |
+      nebari-dev/nebari-docs
+      nebari-dev/docker-images
+      nebari-dev/governance
+      nebari-dev/nebari-jupyterhub-theme
+    files: .github/ISSUE_TEMPLATE/bug-report.yml
