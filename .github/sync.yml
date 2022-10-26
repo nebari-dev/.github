@@ -2,13 +2,7 @@
 # ref: https://github.com/BetaHuhn/repo-file-sync-action
 group:
   # files shared across all repositories
-  - repos: |
-      nebari-dev/nebari
-      nebari-dev/nebari-docs
-      nebari-dev/docker-images
-      nebari-dev/governance
-      nebari-dev/nebari-jupyterhub-theme
-    files:
+  - files:
       - source: .github/ISSUE_TEMPLATE/
         dest: .github/ISSUE_TEMPLATE/
         exclude: |
@@ -20,18 +14,24 @@ group:
         dest: LICENSE
       - source: CONTRIBUTING.md
         dest: CONTRIBUTING.md
-  # finer grained bug report issues - Nebari
-  - repos: |
+    repos: |
       nebari-dev/nebari
-    files:
-      - source: .github/ISSUE_TEMPLATE/bug-report-nebari.yml
-      - dest: .github/ISSUE_TEMPLATE/bug-report.yml
-  # general bug report
-  - repos: |
       nebari-dev/nebari-docs
       nebari-dev/docker-images
       nebari-dev/governance
       nebari-dev/nebari-jupyterhub-theme
-    files:
+  # finer grained bug report issues - Nebari
+  - files:
+      - source: .github/ISSUE_TEMPLATE/bug-report-nebari.yml
+      - dest: .github/ISSUE_TEMPLATE/bug-report.yml
+    repos: |
+      nebari-dev/nebari
+  # general bug report
+  - files:
       - source: .github/ISSUE_TEMPLATE/bug-report.yml
       - dest: .github/ISSUE_TEMPLATE/bug-report.yml
+    repos: |
+      nebari-dev/nebari-docs
+      nebari-dev/docker-images
+      nebari-dev/governance
+      nebari-dev/nebari-jupyterhub-theme
