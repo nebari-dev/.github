@@ -23,11 +23,15 @@ group:
   # finer grained bug report issues - Nebari
   - repos: |
       nebari-dev/nebari
-    files: .github/ISSUE_TEMPLATE/bug-report-nebari.yml
+    files:
+      - source: .github/ISSUE_TEMPLATE/bug-report-nebari.yml
+      - dest: .github/ISSUE_TEMPLATE/bug-report.yml
   # general bug report
   - repos: |
       nebari-dev/nebari-docs
       nebari-dev/docker-images
       nebari-dev/governance
       nebari-dev/nebari-jupyterhub-theme
-    files: .github/ISSUE_TEMPLATE/bug-report.yml
+    files:
+      - source: .github/ISSUE_TEMPLATE/bug-report.yml
+      - dest: .github/ISSUE_TEMPLATE/bug-report.yml
