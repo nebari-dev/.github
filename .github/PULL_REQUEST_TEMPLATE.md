@@ -60,7 +60,7 @@ please address the access-centred guidelines in your content and complete our ch
 - [ ] Don't use [flashing GIFs or videos](https://www.w3.org/TR/UNDERSTANDING-WCAG20/seizure-does-not-violate.html).
 - [ ] If the content were to be read as plain text, it still makes sense, and no information is missing.
 
-### Any other comments?
+## Any other comments?
 
 <!--
 Please be aware that we are a loose team of volunteers, so patience is necessary;
