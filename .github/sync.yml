@@ -8,6 +8,8 @@ group:
         exclude: |
           bug-report.yml
           bug-report-nebari.yml
+          RFD.md
+        deleteOrphaned: true
       - source: LICENSE
         dest: LICENSE
       - source: CONTRIBUTING.md
@@ -18,6 +20,8 @@ group:
       nebari-dev/docker-images
       nebari-dev/governance
       nebari-dev/nebari-jupyterhub-theme
+      nebari-dev/nebari-deploy
+      nebari-dev/nebari-demo
 
   # finer grained bug report issues - Nebari
   - files:
@@ -35,6 +39,8 @@ group:
       nebari-dev/docker-images
       nebari-dev/governance
       nebari-dev/nebari-jupyterhub-theme
+      nebari-dev/nebari-deploy
+      nebari-dev/nebari-demo
 
   # pull request template - adds the documentation section
   - files:
@@ -45,6 +51,8 @@ group:
       nebari-dev/docker-images
       nebari-dev/governance
       nebari-dev/nebari-jupyterhub-theme
+      nebari-dev/nebari-deploy
+      nebari-dev/nebari-demo
 
   # pull request template - without the documentation section
   - files:
@@ -52,3 +60,10 @@ group:
         dest: .github/PULL_REQUEST_TEMPLATE.md
     repos: |
       nebari-dev/nebari
+
+  # RFD - should only be in the governance repo
+  - files:
+      - source: .github/ISSUE_TEMPLATE/RFD.md
+        dest: .github/ISSUE_TEMPLATE/RFD.md
+    repos: |
+      nebari-dev/governance
