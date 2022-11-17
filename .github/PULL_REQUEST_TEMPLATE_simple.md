@@ -18,7 +18,7 @@ _Put a `x` in the boxes that apply_
 
 - [ ] Bug fix (non-breaking change which fixes an issue)
 - [ ] New feature (non-breaking change which adds a feature)
-- [ ] Breaking change (fix or feature that would cause existing features to not work as expected)
+- [ ] Breaking change (fix or feature that would cause existing features not to work as expected)
 - [ ] Documentation Update
 - [ ] Code style update (formatting, renaming)
 - [ ] Refactoring (no functional changes, no API changes)
