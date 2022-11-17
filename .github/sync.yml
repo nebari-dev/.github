@@ -8,8 +8,6 @@ group:
         exclude: |
           bug-report.yml
           bug-report-nebari.yml
-      - source: .github/PULL_REQUEST_TEMPLATE.md
-        dest: .github/PULL_REQUEST_TEMPLATE.md
       - source: LICENSE
         dest: LICENSE
       - source: CONTRIBUTING.md
@@ -20,18 +18,37 @@ group:
       nebari-dev/docker-images
       nebari-dev/governance
       nebari-dev/nebari-jupyterhub-theme
+
   # finer grained bug report issues - Nebari
   - files:
       - source: .github/ISSUE_TEMPLATE/bug-report-nebari.yml
-      - dest: .github/ISSUE_TEMPLATE/bug-report.yml
+        dest: .github/ISSUE_TEMPLATE/bug-report.yml
     repos: |
       nebari-dev/nebari
+
   # general bug report
   - files:
       - source: .github/ISSUE_TEMPLATE/bug-report.yml
-      - dest: .github/ISSUE_TEMPLATE/bug-report.yml
+        dest: .github/ISSUE_TEMPLATE/bug-report.yml
     repos: |
       nebari-dev/nebari-docs
       nebari-dev/docker-images
       nebari-dev/governance
       nebari-dev/nebari-jupyterhub-theme
+
+  # pull request template - adds the documentation section
+  - files:
+      - source: .github/PULL_REQUEST_TEMPLATE.md
+        dest: .github/PULL_REQUEST_TEMPLATE.md
+    repos: |
+      nebari-dev/nebari-docs
+      nebari-dev/docker-images
+      nebari-dev/governance
+      nebari-dev/nebari-jupyterhub-theme
+
+  # pull request template - without the documentation section
+  - files:
+      - source: .github/PULL_REQUEST_TEMPLATE_simple.md
+        dest: .github/PULL_REQUEST_TEMPLATE.md
+    repos: |
+      nebari-dev/nebari

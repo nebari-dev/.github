@@ -73,8 +73,8 @@ body:
       description: |
         Describe your environment:
         - Conda version (use `conda --version`)
-        - Kubernetes version (use `kubectl version`)
-        - Nebari version
+        - Operating system
+        - Dependencies installed and their version
     validations:
       required: false
 

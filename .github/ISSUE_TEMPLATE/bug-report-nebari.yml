@@ -42,7 +42,7 @@ body:
 
   - type: input
     attributes:
-      label: OS system and architecture in which you are running Nebari
+      label: OS and architecture in which you are running Nebari
     validations:
       required: true
 
@@ -94,21 +94,21 @@ body:
         - "GCP"
         - "AWS"
         - "Digital Ocean"
-        - "minikube"
+        - "kind"
     validations:
       required: false
 
   - type: dropdown
     attributes:
       label: Integrations
-      description: Is this issue related to onay of the Nebari integrations?
+      description: Is this issue related to any of the Nebari integrations?
       multiple: true
       options:
         - "Prefect"
         - "Keycloak"
         - "conda-store"
         - "Dask"
-        - "dashboards"
+        - "CDS dashboards"
         - "Grafana"
         - "Argo"
 
