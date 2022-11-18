@@ -9,6 +9,7 @@ group:
           bug-report.yml
           bug-report-nebari.yml
           RFD.md
+          config-docs-repo.yml
         deleteOrphaned: true
       - source: LICENSE
         dest: LICENSE
@@ -27,6 +28,7 @@ group:
   - files:
       - source: .github/ISSUE_TEMPLATE/bug-report-nebari.yml
         dest: .github/ISSUE_TEMPLATE/bug-report.yml
+        deleteOrphaned: true
     repos: |
       nebari-dev/nebari
 
@@ -34,6 +36,7 @@ group:
   - files:
       - source: .github/ISSUE_TEMPLATE/bug-report.yml
         dest: .github/ISSUE_TEMPLATE/bug-report.yml
+        deleteOrphaned: true
     repos: |
       nebari-dev/nebari-docs
       nebari-dev/docker-images
@@ -46,6 +49,7 @@ group:
   - files:
       - source: .github/PULL_REQUEST_TEMPLATE.md
         dest: .github/PULL_REQUEST_TEMPLATE.md
+        deleteOrphaned: true
     repos: |
       nebari-dev/nebari-docs
       nebari-dev/docker-images
@@ -58,6 +62,7 @@ group:
   - files:
       - source: .github/PULL_REQUEST_TEMPLATE_simple.md
         dest: .github/PULL_REQUEST_TEMPLATE.md
+        deleteOrphaned: true
     repos: |
       nebari-dev/nebari
 
@@ -65,5 +70,14 @@ group:
   - files:
       - source: .github/ISSUE_TEMPLATE/RFD.md
         dest: .github/ISSUE_TEMPLATE/RFD.md
+        deleteOrphaned: true
     repos: |
       nebari-dev/governance
+
+  # nebari-docs config
+  - files:
+      - source: .github/ISSUE_TEMPLATE/config-docs.yml
+        dest: .github/ISSUE_TEMPLATE/config.yml
+        deleteOrphaned: true
+    repos: |
+      nebari-dev/nebari-docs
