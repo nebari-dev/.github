@@ -2,7 +2,7 @@
 
 [![Sync Issue Templates](https://github.com/nebari-dev/.github/actions/workflows/sync-issue-templates.yaml/badge.svg)](https://github.com/nebari-dev/.github/actions/workflows/sync-issue-templates.yaml)
 
-This is a meta repository that defines some shared files for the repositories under the `Nebari-dev` organization.
+This is a meta-repository that defines some shared files for the repositories under the `Nebari-dev` organization.
 
 ## :file_folder: Files in this repository
 
@@ -14,7 +14,7 @@ Below is a quick list of what you'll find in this repository:
 - `CONTRIBUTING.md`: Base contributing guidelines for all of our projects, this is automatically synced to our other repositories via [this GitHub action](.github/workflows/sync-pull-request-templates.yaml).
 
 > **Warning**
-> The syncing action requires a Personal Authentication Token (PAT) which is currently set up through [Quansight-bot](https://github.com/quansight-bot)
+> The syncing action requires a Personal Authentication Token (PAT) which is currently set up through [Nebari-sensei](https://github.com/nebari-sensei)
 
 ## :broom: Pre-commit hooks
 
