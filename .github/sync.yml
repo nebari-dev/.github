@@ -6,11 +6,14 @@ group:
       - source: .github/ISSUE_TEMPLATE/
         dest: .github/ISSUE_TEMPLATE/
         exclude: |
-          bug-report.yml
-          bug-report-nebari.yml
           RFD.md
+          bug-report.yml
           config-docs-repo.yml
           documentation.yml
+          bug-report-nebari.yml
+          feature-request.yml
+          release-checklist.md
+          testing-checklist.md
         deleteOrphaned: true
       - source: LICENSE
         dest: LICENSE
@@ -24,14 +27,6 @@ group:
       nebari-dev/nebari-jupyterhub-theme
       nebari-dev/nebari-deploy
       nebari-dev/nebari-demo
-
-  # finer grained bug report issues - Nebari
-  - files:
-      - source: .github/ISSUE_TEMPLATE/bug-report-nebari.yml
-        dest: .github/ISSUE_TEMPLATE/bug-report.yml
-        deleteOrphaned: true
-    repos: |
-      nebari-dev/nebari
 
   # general bug report
   - files:
@@ -59,11 +54,19 @@ group:
       nebari-dev/nebari-deploy
       nebari-dev/nebari-demo
 
-  # pull request template - without the documentation section
+  # nebari only templates
   - files:
       - source: .github/PULL_REQUEST_TEMPLATE_simple.md
         dest: .github/PULL_REQUEST_TEMPLATE.md
         deleteOrphaned: true
+      - source: .github/ISSUE_TEMPLATE/feature-request.yml
+        dest: .github/ISSUE_TEMPLATE/feature-request.yml
+      - source: .github/ISSUE_TEMPLATE/release-checklist.yml
+        dest: .github/ISSUE_TEMPLATE/release-checklist.yml
+      - source: .github/ISSUE_TEMPLATE/testing-checklist.yml
+        dest: .github/ISSUE_TEMPLATE/testing-checklist.yml
+      - source: .github/ISSUE_TEMPLATE/bug-report-nebari.yml
+        dest: .github/ISSUE_TEMPLATE/bug-report.yml
     repos: |
       nebari-dev/nebari
 
