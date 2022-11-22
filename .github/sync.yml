@@ -61,10 +61,10 @@ group:
         deleteOrphaned: true
       - source: .github/ISSUE_TEMPLATE/feature-request.yml
         dest: .github/ISSUE_TEMPLATE/feature-request.yml
-      - source: .github/ISSUE_TEMPLATE/release-checklist.yml
-        dest: .github/ISSUE_TEMPLATE/release-checklist.yml
-      - source: .github/ISSUE_TEMPLATE/testing-checklist.yml
-        dest: .github/ISSUE_TEMPLATE/testing-checklist.yml
+      - source: .github/ISSUE_TEMPLATE/release-checklist.md
+        dest: .github/ISSUE_TEMPLATE/release-checklist.md
+      - source: .github/ISSUE_TEMPLATE/testing-checklist.md
+        dest: .github/ISSUE_TEMPLATE/testing-checklist.md
       - source: .github/ISSUE_TEMPLATE/bug-report-nebari.yml
         dest: .github/ISSUE_TEMPLATE/bug-report.yml
     repos: |
