@@ -93,7 +93,7 @@ group:
       nebari-dev/nebari-deploy
       nebari-dev/nebari-jupyterhub-theme
 
-  # CoC shared will all repos except governance
+  # CoC shared with all repos except governance
   - files:
       - source: CODE_OF_CONDUCT.md
         dest: CCODE_OF_CONDUCT.md
