@@ -80,7 +80,7 @@ group:
 
   # nebari-docs config
   - files:
-      - source: .github/ISSUE_TEMPLATE/config-docs.yml
+      - source: .github/ISSUE_TEMPLATE/config-docs-repo.yml
         dest: .github/ISSUE_TEMPLATE/config.yml
       - source: .github/ISSUE_TEMPLATE/documentation.yml
         dest: .github/ISSUE_TEMPLATE/documentation.yml
@@ -96,7 +96,7 @@ group:
   # CoC shared with all repos except governance
   - files:
       - source: CODE_OF_CONDUCT.md
-        dest: CCODE_OF_CONDUCT.md
+        dest: CODE_OF_CONDUCT.md
         deleteOrphaned: true
     repos: |
       nebari-dev/nebari
