@@ -92,3 +92,16 @@ group:
       nebari-dev/nebari-demo
       nebari-dev/nebari-deploy
       nebari-dev/nebari-jupyterhub-theme
+
+  # CoC shared with all repos except governance
+  - files:
+      - source: CODE_OF_CONDUCT.md
+        dest: CCODE_OF_CONDUCT.md
+        deleteOrphaned: true
+    repos: |
+      nebari-dev/nebari
+      nebari-dev/nebari-docs
+      nebari-dev/docker-images
+      nebari-dev/nebari-jupyterhub-theme
+      nebari-dev/nebari-deploy
+      nebari-dev/nebari-demo
