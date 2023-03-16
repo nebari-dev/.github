@@ -6,7 +6,7 @@
 
 ---
 
-📖 Looking to learn about Nebari? Check out [our documentation](https://www.nebari.dev/docs).
+📖 Looking to learn about Nebari? Check out [our documentation](https://www.nebari.dev/docs/welcome).
 
 🪴 Want to report a bug or have a new feature request? [Open an issue](https://github.com/nebari-dev/nebari/issues/new/choose).
 
