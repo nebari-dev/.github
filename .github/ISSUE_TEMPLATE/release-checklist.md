@@ -62,5 +62,5 @@ _These steps must be actioned in the order they appear in this checklist._
 - [ ] [Cut PyPI release via GHA release workflow.](https://github.com/nebari-dev/nebari/releases/new)
   - Avoid appending `v` to tag.
     - Copy release notes from `RELEASE.md`.
-- [ ] Merge release branch into `main`
+- [ ] Merge release branch into `main` using a "Merge Commit"
 - [ ] [Merge automated release PR for `nebari` on Conda-Forge.](https://github.com/conda-forge/nebari-feedstock)
