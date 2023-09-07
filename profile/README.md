@@ -12,6 +12,6 @@
 
 💬 Have a question about using Nebari? Ask on [our community forum](https://github.com/orgs/nebari-dev/discussions).
 
-💎 Wish to contribute to Nebari? Check out [our contributing guidelines](https://www.nebari.dev/community/#how-to-contribute).
+💎 Wish to contribute to Nebari? Check out [our contributing guidelines](https://www.nebari.dev/docs/community#how-to-contribute).
 
 ✨ Curious what we're working on? Check out [our roadmap](https://github.com/nebari-dev/governance).
