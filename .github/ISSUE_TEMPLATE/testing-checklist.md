@@ -20,7 +20,10 @@ At minimum, the following services will need to be tested:
 
 - [ ] [Log into keycloak as root user](https://nebari-docs.netlify.app/how-tos/configuring-keycloak#change-keycloak-root-password)
   - [ ] [Add a user](https://nebari-docs.netlify.app/how-tos/configuring-keycloak#adding-a-nebari-user)
-- [ ] [Log into conda-store and create](https://nebari-docs.netlify.app/tutorials/creating-new-environments)
+- [ ] [Log into conda-store from JupyterHub and create](https://nebari-docs.netlify.app/tutorials/creating-new-environments)
+  - [ ] a conda environment in a shared namespace and,
+  - [ ] a conda environment in your personal namespace
+- [ ] [Log into conda-store from JupyterLab (i.e., the extension) and create](https://nebari-docs.netlify.app/tutorials/creating-new-environments)
   - [ ] a conda environment in a shared namespace and,
   - [ ] a conda environment in your personal namespace
 - [ ] [Launch dask-gateway cluster, test auto-scaler and](https://nebari-docs.netlify.app/tutorials/using_dask)
