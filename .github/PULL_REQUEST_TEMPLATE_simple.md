@@ -19,16 +19,24 @@ _Put a `x` in the boxes that apply_
 - [ ] Bug fix (non-breaking change which fixes an issue)
 - [ ] New feature (non-breaking change which adds a feature)
 - [ ] Breaking change (fix or feature that would cause existing features not to work as expected)
-- [ ] Documentation Update
 - [ ] Code style update (formatting, renaming)
 - [ ] Refactoring (no functional changes, no API changes)
 - [ ] Build related changes
 - [ ] Other (please describe):
 
+## Documentation
+
+- [ ] Did you add/update relevant documentation (in [nebari-dev/nebari-docs](https://github.com/nebari-dev/nebari-docs))? Link to PR:
+
 ## Testing
 
 - [ ] Did you test the pull request locally?
 - [ ] Did you add new tests?
+
+### How to test
+
+<!-- Steps to take to test the new feature, verify the bug is fixed, etc.
+Please do not just include steps for the happy path, but failure modes too. -->
 
 ## Any other comments?
 
