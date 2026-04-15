@@ -1,0 +1,110 @@
+name: Sync project priority from labels
+
+# Reusable workflow: adds an issue or PR to a Projects v2 board and syncs the
+# Priority single-select field based on labels of the form "priority: <level>".
+#
+# Triggered by caller repos on issues/pull_request events (opened, labeled, unlabeled).
+# The caller passes the project's GraphQL node ID and a PAT with project: write scope.
+
+on:
+  workflow_call:
+    inputs:
+      project-id:
+        description: 'GraphQL node ID of the project (e.g. PVT_kwDOBd3CI84BKoKt)'
+        required: true
+        type: string
+      priority-field-name:
+        description: 'Name of the single-select field holding priority'
+        required: false
+        type: string
+        default: 'Priority'
+    secrets:
+      token:
+        description: 'PAT with project: write and repo: read scopes'
+        required: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.token }}
+    steps:
+      - name: Add issue/PR to project
+        id: add
+        env:
+          PROJECT_ID: ${{ inputs.project-id }}
+          CONTENT_ID: ${{ github.event.issue.node_id || github.event.pull_request.node_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CONTENT_ID" ]; then
+            echo "No issue/PR node id; skipping."
+            exit 0
+          fi
+          ITEM_ID=$(gh api graphql -f query='
+            mutation($p:ID!,$c:ID!){
+              addProjectV2ItemById(input:{projectId:$p,contentId:$c}){ item { id } }
+            }' -F p="$PROJECT_ID" -F c="$CONTENT_ID" --jq '.data.addProjectV2ItemById.item.id')
+          echo "item_id=$ITEM_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Look up priority field and options
+        id: field
+        if: steps.add.outputs.item_id != ''
+        env:
+          PROJECT_ID: ${{ inputs.project-id }}
+          FIELD_NAME: ${{ inputs.priority-field-name }}
+        run: |
+          set -euo pipefail
+          resp=$(gh api graphql -f query='
+            query($p:ID!){
+              node(id:$p){
+                ... on ProjectV2 {
+                  fields(first:50){
+                    nodes {
+                      ... on ProjectV2SingleSelectField {
+                        id name
+                        options { id name }
+                      }
+                    }
+                  }
+                }
+              }
+            }' -F p="$PROJECT_ID")
+          FIELD_ID=$(echo "$resp" | jq -r --arg n "$FIELD_NAME" '.data.node.fields.nodes[] | select(.name==$n) | .id')
+          if [ -z "$FIELD_ID" ] || [ "$FIELD_ID" = "null" ]; then
+            echo "Field '$FIELD_NAME' not found on project; skipping priority sync."
+            exit 0
+          fi
+          echo "$resp" | jq -c --arg n "$FIELD_NAME" '.data.node.fields.nodes[] | select(.name==$n) | .options' > "$RUNNER_TEMP/options.json"
+          echo "field_id=$FIELD_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Apply priority from labels
+        if: steps.field.outputs.field_id != ''
+        env:
+          PROJECT_ID: ${{ inputs.project-id }}
+          FIELD_ID: ${{ steps.field.outputs.field_id }}
+          ITEM_ID: ${{ steps.add.outputs.item_id }}
+          LABELS: ${{ toJSON(github.event.issue.labels || github.event.pull_request.labels) }}
+        run: |
+          set -uo pipefail
+          PRIORITY=$(echo "$LABELS" | jq -r '.[].name' | grep -oE '^priority: [a-zA-Z]+' | head -1 | awk '{print $2}')
+
+          if [ -z "$PRIORITY" ]; then
+            echo "No priority label; clearing field."
+            gh api graphql -f query='
+              mutation($p:ID!,$i:ID!,$f:ID!){
+                clearProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f}){ projectV2Item { id } }
+              }' -F p="$PROJECT_ID" -F i="$ITEM_ID" -F f="$FIELD_ID"
+            exit 0
+          fi
+
+          OPT=$(jq -r --arg p "$PRIORITY" '.[] | select(.name | ascii_downcase == ($p | ascii_downcase)) | .id' "$RUNNER_TEMP/options.json")
+          if [ -z "$OPT" ]; then
+            echo "No option matching '$PRIORITY' on field; skipping."
+            exit 0
+          fi
+
+          echo "Setting priority to '$PRIORITY'"
+          gh api graphql -f query='
+            mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){
+              updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){ projectV2Item { id } }
+            }' -F p="$PROJECT_ID" -F i="$ITEM_ID" -F f="$FIELD_ID" -f o="$OPT"
