@@ -86,7 +86,7 @@ jobs:
           LABELS: ${{ toJSON(github.event.issue.labels || github.event.pull_request.labels) }}
         run: |
           set -uo pipefail
-          PRIORITY=$(echo "$LABELS" | jq -r '.[].name' | grep -oE '^priority: [a-zA-Z]+' | head -1 | awk '{print $2}')
+          PRIORITY=$(echo "$LABELS" | jq -r '[.[].name | capture("^priority: (?<p>[a-zA-Z]+)") | .p][0] // ""')
 
           if [ -z "$PRIORITY" ]; then
             echo "No priority label; clearing field."
