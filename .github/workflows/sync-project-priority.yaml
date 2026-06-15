@@ -3,24 +3,32 @@ name: Sync project priority from labels
 # Reusable workflow: adds an issue or PR to a Projects v2 board and syncs the
 # Priority single-select field based on labels of the form "priority: <level>".
 #
-# Triggered by caller repos on issues/pull_request events (opened, labeled, unlabeled).
-# The caller passes the project's GraphQL node ID and a PAT with project: write scope.
+# Triggered by caller repos on issues and pull_request_target events
+# (opened, labeled, unlabeled). The caller passes the project's GraphQL node ID
+# and a PAT with project: write scope.
+#
+# Note: callers must use pull_request_target (not pull_request) for the PR
+# trigger. PRs opened from forks do not receive secrets under pull_request, so
+# the PAT would be empty and the job would fail. pull_request_target runs in the
+# base repo's context, making the secret available. This is safe because this
+# workflow checks out no PR code — it only reads trusted event metadata
+# (node_id, labels) and calls the GitHub API.
 
 on:
   workflow_call:
     inputs:
       project-id:
-        description: 'GraphQL node ID of the project (e.g. PVT_kwDOBd3CI84BKoKt)'
+        description: "GraphQL node ID of the project (e.g. PVT_kwDOBd3CI84BKoKt)"
         required: true
         type: string
       priority-field-name:
-        description: 'Name of the single-select field holding priority'
+        description: "Name of the single-select field holding priority"
         required: false
         type: string
-        default: 'Priority'
+        default: "Priority"
     secrets:
       token:
-        description: 'PAT with project: write and repo: read scopes'
+        description: "PAT with project: write and repo: read scopes"
         required: true
 
 jobs:
