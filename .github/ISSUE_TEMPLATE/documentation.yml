@@ -18,8 +18,8 @@ body:
 
         Useful links:
 
-        - Documentation: https://www.nebari.dev
-        - Contribution guidelines: https://www.nebari.dev/community/
+        - Documentation: https://nebari.dev
+        - Contribution guidelines: https://nebari.dev/community/introduction/
 
   - type: checkboxes
     attributes:
