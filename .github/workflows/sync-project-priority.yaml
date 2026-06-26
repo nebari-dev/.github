@@ -84,11 +84,17 @@ jobs:
           FIELD_ID: ${{ steps.field.outputs.field_id }}
           ITEM_ID: ${{ steps.add.outputs.item_id }}
           LABELS: ${{ toJSON(github.event.issue.labels || github.event.pull_request.labels) }}
+          IS_ISSUE: ${{ github.event.issue.node_id != '' && github.event.issue.node_id != null }}
         run: |
           set -uo pipefail
           PRIORITY=$(echo "$LABELS" | jq -r '[.[].name | capture("^priority: (?<p>[a-zA-Z]+)") | .p][0] // ""')
 
           if [ -z "$PRIORITY" ]; then
+            # clearProjectV2ItemFieldValue only supports issues, not pull requests.
+            if [ "$IS_ISSUE" != "true" ]; then
+              echo "No priority label; skipping clear (only issues support clearing fields)."
+              exit 0
+            fi
             echo "No priority label; clearing field."
             gh api graphql -f query='
               mutation($p:ID!,$i:ID!,$f:ID!){
