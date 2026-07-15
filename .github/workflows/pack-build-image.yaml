@@ -1,0 +1,98 @@
+name: pack-build-image
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: "Image name suffix, e.g. 'operator' or 'frontend'."
+        required: true
+        type: string
+      context:
+        description: "Docker build context path."
+        required: true
+        type: string
+      dockerfile:
+        description: "Path to the Dockerfile. Defaults to '<context>/Dockerfile'."
+        required: false
+        type: string
+        default: ""
+      target:
+        description: "Optional multi-stage build target."
+        required: false
+        type: string
+        default: ""
+      platforms:
+        description: "Comma-separated platforms to build for."
+        required: false
+        type: string
+        default: "linux/amd64"
+      push:
+        description: "Whether to push the built image. Set false for pull_request builds."
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      QUAY_TOKEN:
+        required: true
+
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/${{ inputs.image }}
+  QUAY_IMAGE: quay.io/nebari/${{ github.event.repository.name }}-${{ inputs.image }}
+
+jobs:
+  build:
+    name: Build and push ${{ inputs.image }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Short sha
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: ${{ inputs.push }}
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Quay
+        if: ${{ inputs.push }}
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: quay.io
+          username: ${{ vars.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_TOKEN }}
+
+      - name: Metadata (tags)
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        with:
+          images: |
+            ${{ env.GHCR_IMAGE }}
+            ${{ env.QUAY_IMAGE }}
+          tags: |
+            type=raw,value=sha-${{ steps.sha.outputs.short }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile || format('{0}/Dockerfile', inputs.context) }}
+          target: ${{ inputs.target }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:cache
+          cache-to: ${{ inputs.push && format('type=registry,ref={0}:cache,mode=max', env.GHCR_IMAGE) || '' }}
