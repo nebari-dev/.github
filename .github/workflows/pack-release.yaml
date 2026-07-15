@@ -143,13 +143,13 @@ jobs:
           CHART_PATH: ${{ inputs.chart-path }}
           TAG_PATHS: ${{ inputs.tag-paths }}
         run: |
-          pip install "ruamel.yaml==0.19.1"
+          python3 -m pip install "ruamel.yaml==0.19.1"
 
           short_sha="${GITHUB_SHA::7}"
           mapfile -t paths < <(printf '%s\n' "$TAG_PATHS" | sed '/^[[:space:]]*$/d')
           echo "Pinning ${#paths[@]} path(s) to sha-${short_sha}: ${paths[*]}"
 
-          python _dot-github/.github/scripts/pin_image_tags.py \
+          python3 _dot-github/.github/scripts/pin_image_tags.py \
             "${CHART_PATH}/values.yaml" "sha-${short_sha}" "${paths[@]}"
 
       - name: Set up Helm
