@@ -34,6 +34,8 @@ on:
     secrets:
       QUAY_TOKEN:
         required: false
+      QUAY_USERNAME:
+        required: false
 
 env:
   GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}/${{ inputs.image }}
@@ -70,7 +72,7 @@ jobs:
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: quay.io
-          username: ${{ vars.QUAY_USERNAME }}
+          username: ${{ secrets.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_TOKEN }}
 
       - name: Metadata (tags)
