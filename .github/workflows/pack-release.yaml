@@ -1,0 +1,209 @@
+name: pack-release
+
+# Reusable release workflow for Nebari software packs.
+#
+# Given a chart source directory living in the calling repository, this
+# workflow:
+#   1. Reads the chart version from <chart-path>/Chart.yaml.
+#   2. Skips everything below if a GitHub Release for <chart-name>-<version>
+#      already exists (idempotent re-runs, e.g. after a workflow retry).
+#   3. Pins the given `tag-paths` (dotted values.yaml keys, e.g.
+#      "operator.image.tag") to sha-<short-sha> of the release commit, in
+#      the checked-out working copy only. This is never committed back to
+#      the calling repository -- it only affects the packaged chart and the
+#      copy synced to nebari-dev/helm-repository in the final step.
+#   4. Packages the chart with `helm package` and attaches the resulting
+#      .tgz to a GitHub Release in the calling repository.
+#   5. Syncs the (now pinned) chart source to the central
+#      nebari-dev/helm-repository via the shared sync-chart action, which
+#      opens a pull request there.
+#
+# Images: the caller is expected to build and push sha-<short>-tagged
+# images (via pack-build-image.yaml or equivalent) in parallel, on the
+# same push to `main` that triggers this release workflow. There is no
+# hard cross-workflow gate in v1 -- this workflow does not wait for the
+# image build to finish before pinning/publishing. If build times ever
+# lag behind release publication badly enough to matter, add a wait step
+# here (e.g. polling the build workflow run) in a future revision.
+#
+# Quay.io chart repositories: sync-chart only copies chart source into
+# nebari-dev/helm-repository and opens a PR there -- it does not touch
+# quay.io itself. The actual `helm package` + ensure-quay-repos + OCI push
+# to quay.io/nebari/charts happens automatically inside
+# nebari-dev/helm-repository's own release-helm-charts.yml once that PR
+# merges, using a QUAY_API_TOKEN secret scoped to that repo alone. This
+# workflow deliberately does not add its own ensure-quay-repos step: it
+# has no access to that token, and calling it here would be redundant
+# with (and could race) the downstream automation that already runs it.
+
+on:
+  workflow_call:
+    inputs:
+      chart-path:
+        description: >-
+          Path to the Helm chart source directory in the calling repository
+          (must contain a Chart.yaml).
+        required: true
+        type: string
+      chart-name:
+        description: >-
+          Chart name used for the GitHub Release tag
+          (<chart-name>-<version>) and as the destination directory name
+          in nebari-dev/helm-repository.
+        required: true
+        type: string
+      tag-paths:
+        description: >-
+          Newline-separated list of dotted values.yaml paths to pin to the
+          release's sha-<short-sha> tag, for example:
+            operator.image.tag
+            worker.image.tag
+        required: true
+        type: string
+    secrets:
+      NEBARI_HELM_REPO_TOKEN:
+        description: >-
+          Fine-grained PAT with contents + pull-request write on
+          nebari-dev/helm-repository. Used only by the sync-chart step.
+        required: true
+
+jobs:
+  release:
+    name: Release ${{ inputs.chart-name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Read chart metadata
+        id: chart
+        run: |
+          chart_yaml="${{ inputs.chart-path }}/Chart.yaml"
+          if [ ! -f "$chart_yaml" ]; then
+            echo "::error::Chart.yaml not found at ${chart_yaml}. Check 'chart-path'."
+            exit 1
+          fi
+
+          version=$(grep -E '^version:' "$chart_yaml" | head -1 | awk '{print $2}' | tr -d "\"'")
+          if [ -z "$version" ]; then
+            echo "::error::Could not read 'version' from ${chart_yaml}."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=${{ inputs.chart-name }}-$version" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if already released
+        id: exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.chart.outputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::notice::Release ${{ steps.chart.outputs.tag }} already exists, skipping."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The pin logic is intentionally inlined rather than checked out from
+      # this reusable workflow's own repo (nebari-dev/.github). The
+      # Checkout step above only fetches the CALLING repository, and
+      # GitHub Actions does not expose a supported context expression for
+      # "the repo@ref that supplied the currently-running reusable
+      # workflow" (the OIDC-only job_workflow_ref/job_workflow_sha claims
+      # aren't available as `${{ }}` expressions). Fetching nebari-dev/.github
+      # again at a best-guess ref (e.g. `main`) would defeat the SHA-pinning
+      # used everywhere else in this workflow for reproducibility. Inlining
+      # keeps this step self-contained and exactly matches whatever commit
+      # of pack-release.yaml the caller pinned.
+      #
+      # This must be kept in sync with the pin() function in
+      # .github/scripts/pin_image_tags.py, which carries the unit tests
+      # for this logic (.github/scripts/test_pin_image_tags.py).
+      - name: Pin image tags to release sha
+        if: steps.exists.outputs.exists == 'false'
+        run: |
+          pip install "ruamel.yaml==0.19.1"
+
+          short_sha="${GITHUB_SHA::7}"
+          mapfile -t paths < <(printf '%s\n' "${{ inputs.tag-paths }}" | sed '/^[[:space:]]*$/d')
+          echo "Pinning ${#paths[@]} path(s) to sha-${short_sha}: ${paths[*]}"
+
+          VALUES_FILE="${{ inputs.chart-path }}/values.yaml" SHA_TAG="sha-${short_sha}" \
+            python3 - "${paths[@]}" <<'PYEOF'
+          import os
+          import sys
+
+          from ruamel.yaml import YAML
+
+
+          def pin(values_file, sha_tag, paths):
+              yaml = YAML()
+              yaml.preserve_quotes = True
+              with open(values_file) as f:
+                  data = yaml.load(f)
+
+              for dotted in paths:
+                  keys = dotted.split(".")
+                  node = data
+                  for key in keys[:-1]:
+                      if not isinstance(node, dict) or key not in node:
+                          raise KeyError(
+                              f"path '{dotted}' not found in {values_file}: no key '{key}'"
+                          )
+                      node = node[key]
+                  leaf = keys[-1]
+                  if not isinstance(node, dict) or leaf not in node:
+                      raise KeyError(
+                          f"path '{dotted}' not found in {values_file}: no key '{leaf}'"
+                      )
+                  node[leaf] = sha_tag
+
+              with open(values_file, "w") as f:
+                  yaml.dump(data, f)
+
+
+          pin(os.environ["VALUES_FILE"], os.environ["SHA_TAG"], sys.argv[1:])
+          PYEOF
+
+      - name: Set up Helm
+        if: steps.exists.outputs.exists == 'false'
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Package chart
+        if: steps.exists.outputs.exists == 'false'
+        run: |
+          helm dependency update "${{ inputs.chart-path }}"
+          helm package "${{ inputs.chart-path }}"
+
+      - name: Determine prerelease flag
+        id: pre
+        if: steps.exists.outputs.exists == 'false'
+        run: |
+          case "${{ steps.chart.outputs.version }}" in
+            *-*) echo "flag=--prerelease" >> "$GITHUB_OUTPUT" ;;
+            *) echo "flag=" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Create GitHub Release
+        if: steps.exists.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.chart.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ steps.chart.outputs.tag }}" \
+            --generate-notes ${{ steps.pre.outputs.flag }} \
+            *.tgz
+
+      - name: Sync chart to nebari-dev/helm-repository
+        if: steps.exists.outputs.exists == 'false'
+        uses: nebari-dev/helm-repository/.github/actions/sync-chart@5cbd23a45c014bf2fa34b4683d4e5ac70ad34fa4 # main 2026-07-03
+        with:
+          token: ${{ secrets.NEBARI_HELM_REPO_TOKEN }}
+          chart-path: ${{ inputs.chart-path }}
+          chart-name: ${{ inputs.chart-name }}
