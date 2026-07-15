@@ -18,13 +18,20 @@ name: pack-release
 #      nebari-dev/helm-repository via the shared sync-chart action, which
 #      opens a pull request there.
 #
-# Images: the caller is expected to build and push sha-<short>-tagged
-# images (via pack-build-image.yaml or equivalent) in parallel, on the
-# same push to `main` that triggers this release workflow. There is no
-# hard cross-workflow gate in v1 -- this workflow does not wait for the
-# image build to finish before pinning/publishing. If build times ever
-# lag behind release publication badly enough to matter, add a wait step
-# here (e.g. polling the build workflow run) in a future revision.
+# Images: this workflow pins the tag-paths to the RELEASE COMMIT's short
+# sha (sha-<short> of the commit that changed Chart.yaml). The caller
+# MUST therefore ensure images for that exact commit get built and
+# pushed -- in practice, trigger the caller's image build on Chart.yaml
+# (or chart) changes too, not only on source-code changes, so that a
+# release commit that only bumps the version still produces the images
+# the published chart will reference. Those builds run in parallel with
+# this workflow on the same push to `main`. There is no hard
+# cross-workflow gate in v1 -- this workflow does not wait for the image
+# build to finish before pinning/publishing; the images land before the
+# chart is consumable downstream (the OCI publish happens later, after
+# the sync-chart PR merges in nebari-dev/helm-repository). If build times
+# ever lag badly enough to matter, add a wait step (e.g. polling the
+# build workflow run) in a future revision.
 #
 # Quay.io chart repositories: sync-chart only copies chart source into
 # nebari-dev/helm-repository and opens a PR there -- it does not touch
