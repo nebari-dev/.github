@@ -81,8 +81,11 @@ jobs:
 
       - name: Read chart metadata
         id: chart
+        env:
+          CHART_PATH: ${{ inputs.chart-path }}
+          CHART_NAME: ${{ inputs.chart-name }}
         run: |
-          chart_yaml="${{ inputs.chart-path }}/Chart.yaml"
+          chart_yaml="${CHART_PATH}/Chart.yaml"
           if [ ! -f "$chart_yaml" ]; then
             echo "::error::Chart.yaml not found at ${chart_yaml}. Check 'chart-path'."
             exit 1
@@ -95,7 +98,7 @@ jobs:
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=${{ inputs.chart-name }}-$version" >> "$GITHUB_OUTPUT"
+          echo "tag=${CHART_NAME}-$version" >> "$GITHUB_OUTPUT"
 
       - name: Skip if already released
         id: exists
@@ -109,66 +112,45 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # The pin logic is intentionally inlined rather than checked out from
-      # this reusable workflow's own repo (nebari-dev/.github). The
-      # Checkout step above only fetches the CALLING repository, and
-      # GitHub Actions does not expose a supported context expression for
-      # "the repo@ref that supplied the currently-running reusable
-      # workflow" (the OIDC-only job_workflow_ref/job_workflow_sha claims
-      # aren't available as `${{ }}` expressions). Fetching nebari-dev/.github
-      # again at a best-guess ref (e.g. `main`) would defeat the SHA-pinning
-      # used everywhere else in this workflow for reproducibility. Inlining
-      # keeps this step self-contained and exactly matches whatever commit
-      # of pack-release.yaml the caller pinned.
+      # Reusable workflows can check out their OWN repo (as opposed to the
+      # caller's) via the `job` context: job.workflow_repository and
+      # job.workflow_sha identify exactly the nebari-dev/.github commit
+      # that the calling workflow pinned to invoke this file, which is
+      # documented for exactly this case -- "when a reusable workflow
+      # needs to access files co-located with the workflow definition."
+      # (job.workflow_ref/workflow_sha/workflow_repository are not
+      # available on GHES, but nebari-dev is on github.com, so that
+      # restriction doesn't apply here.) This lets the pin step below run
+      # the real, unit-tested .github/scripts/pin_image_tags.py instead
+      # of an inlined duplicate.
       #
-      # This must be kept in sync with the pin() function in
-      # .github/scripts/pin_image_tags.py, which carries the unit tests
-      # for this logic (.github/scripts/test_pin_image_tags.py).
+      # nebari-dev/.github is a public repository, so the default
+      # GITHUB_TOKEN is sufficient to check it out -- no extra secret is
+      # needed. Checked out to its own path (_dot-github) so it doesn't
+      # collide with the caller's checkout at the workspace root, which
+      # is where `chart-path` continues to resolve from.
+      - name: Check out the reusable workflow's repo (for its scripts)
+        if: steps.exists.outputs.exists == 'false'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: _dot-github
+
       - name: Pin image tags to release sha
         if: steps.exists.outputs.exists == 'false'
+        env:
+          CHART_PATH: ${{ inputs.chart-path }}
+          TAG_PATHS: ${{ inputs.tag-paths }}
         run: |
           pip install "ruamel.yaml==0.19.1"
 
           short_sha="${GITHUB_SHA::7}"
-          mapfile -t paths < <(printf '%s\n' "${{ inputs.tag-paths }}" | sed '/^[[:space:]]*$/d')
+          mapfile -t paths < <(printf '%s\n' "$TAG_PATHS" | sed '/^[[:space:]]*$/d')
           echo "Pinning ${#paths[@]} path(s) to sha-${short_sha}: ${paths[*]}"
 
-          VALUES_FILE="${{ inputs.chart-path }}/values.yaml" SHA_TAG="sha-${short_sha}" \
-            python3 - "${paths[@]}" <<'PYEOF'
-          import os
-          import sys
-
-          from ruamel.yaml import YAML
-
-
-          def pin(values_file, sha_tag, paths):
-              yaml = YAML()
-              yaml.preserve_quotes = True
-              with open(values_file) as f:
-                  data = yaml.load(f)
-
-              for dotted in paths:
-                  keys = dotted.split(".")
-                  node = data
-                  for key in keys[:-1]:
-                      if not isinstance(node, dict) or key not in node:
-                          raise KeyError(
-                              f"path '{dotted}' not found in {values_file}: no key '{key}'"
-                          )
-                      node = node[key]
-                  leaf = keys[-1]
-                  if not isinstance(node, dict) or leaf not in node:
-                      raise KeyError(
-                          f"path '{dotted}' not found in {values_file}: no key '{leaf}'"
-                      )
-                  node[leaf] = sha_tag
-
-              with open(values_file, "w") as f:
-                  yaml.dump(data, f)
-
-
-          pin(os.environ["VALUES_FILE"], os.environ["SHA_TAG"], sys.argv[1:])
-          PYEOF
+          python _dot-github/.github/scripts/pin_image_tags.py \
+            "${CHART_PATH}/values.yaml" "sha-${short_sha}" "${paths[@]}"
 
       - name: Set up Helm
         if: steps.exists.outputs.exists == 'false'
@@ -176,9 +158,11 @@ jobs:
 
       - name: Package chart
         if: steps.exists.outputs.exists == 'false'
+        env:
+          CHART_PATH: ${{ inputs.chart-path }}
         run: |
-          helm dependency update "${{ inputs.chart-path }}"
-          helm package "${{ inputs.chart-path }}"
+          helm dependency update "${CHART_PATH}"
+          helm package "${CHART_PATH}"
 
       - name: Determine prerelease flag
         id: pre

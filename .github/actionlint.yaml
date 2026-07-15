@@ -1,0 +1,17 @@
+# Configuration for actionlint (https://github.com/rhysd/actionlint).
+paths:
+  .github/workflows/pack-release.yaml:
+    ignore:
+      # actionlint's type definitions for the `job` context (still true as
+      # of v1.7.12 / main) only include check_run_id, container, services,
+      # and status. GitHub added job.workflow_ref / job.workflow_sha /
+      # job.workflow_repository / job.workflow_file_path afterwards, so
+      # actionlint doesn't know about them yet and flags real, documented
+      # properties as undefined. Confirmed against GitHub's own docs
+      # (https://docs.github.com/en/actions/reference/contexts-reference#job-context),
+      # which show this exact pattern -- a reusable workflow checking out
+      # its own repo via job.workflow_repository/job.workflow_sha -- as the
+      # canonical example usage. Remove these two lines once actionlint
+      # ships support for the job workflow-identity properties.
+      - 'property "workflow_repository" is not defined in object type'
+      - 'property "workflow_sha" is not defined in object type'
