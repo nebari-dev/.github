@@ -1,0 +1,58 @@
+name: lint-test
+
+# CI for this repo's own reusable workflows and helper scripts.
+#
+# Scoped to the workflows introduced/maintained under this effort
+# (pack-build-image.yaml, pack-release.yaml, and this file) rather than
+# the whole .github/workflows/ directory: the other pre-existing
+# workflows here (sync-issue-templates.yaml, sync-project-priority.yaml)
+# already have unrelated actionlint findings (a floating, EOL
+# actions/checkout@v3 pin and a few shellcheck info-level notes) that
+# predate this change and are out of scope for it. Widen the file list
+# below once those are cleaned up separately.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Run actionlint
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color \
+            .github/workflows/pack-build-image.yaml \
+            .github/workflows/pack-release.yaml \
+            .github/workflows/lint-test.yaml
+
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install "ruamel.yaml==0.19.1" pytest
+
+      - name: Run pytest
+        run: |
+          set -euo pipefail
+          python3 -m pytest .github/scripts/
