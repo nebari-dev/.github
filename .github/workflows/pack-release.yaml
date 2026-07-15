@@ -92,13 +92,14 @@ jobs:
           CHART_PATH: ${{ inputs.chart-path }}
           CHART_NAME: ${{ inputs.chart-name }}
         run: |
+          set -euo pipefail
           chart_yaml="${CHART_PATH}/Chart.yaml"
           if [ ! -f "$chart_yaml" ]; then
             echo "::error::Chart.yaml not found at ${chart_yaml}. Check 'chart-path'."
             exit 1
           fi
 
-          version=$(grep -E '^version:' "$chart_yaml" | head -1 | awk '{print $2}' | tr -d "\"'")
+          version=$(grep -E '^version:' "$chart_yaml" | head -1 | awk '{print $2}' | tr -d "\"'" || true)
           if [ -z "$version" ]; then
             echo "::error::Could not read 'version' from ${chart_yaml}."
             exit 1
@@ -111,9 +112,12 @@ jobs:
         id: exists
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.chart.outputs.tag }}
         run: |
-          if gh release view "${{ steps.chart.outputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "::notice::Release ${{ steps.chart.outputs.tag }} already exists, skipping."
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists, skipping."
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -144,12 +148,19 @@ jobs:
           ref: ${{ job.workflow_sha }}
           path: _dot-github
 
+      - name: Set up Python
+        if: steps.exists.outputs.exists == 'false'
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
       - name: Pin image tags to release sha
         if: steps.exists.outputs.exists == 'false'
         env:
           CHART_PATH: ${{ inputs.chart-path }}
           TAG_PATHS: ${{ inputs.tag-paths }}
         run: |
+          set -euo pipefail
           python3 -m pip install "ruamel.yaml==0.19.1"
 
           short_sha="${GITHUB_SHA::7}"
@@ -168,14 +179,18 @@ jobs:
         env:
           CHART_PATH: ${{ inputs.chart-path }}
         run: |
+          set -euo pipefail
           helm dependency update "${CHART_PATH}"
-          helm package "${CHART_PATH}"
+          helm package "${CHART_PATH}" --destination .
 
       - name: Determine prerelease flag
         id: pre
         if: steps.exists.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.chart.outputs.version }}
         run: |
-          case "${{ steps.chart.outputs.version }}" in
+          set -euo pipefail
+          case "$VERSION" in
             *-*) echo "flag=--prerelease" >> "$GITHUB_OUTPUT" ;;
             *) echo "flag=" >> "$GITHUB_OUTPUT" ;;
           esac
@@ -184,12 +199,24 @@ jobs:
         if: steps.exists.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.chart.outputs.tag }}
+          PRERELEASE_FLAG: ${{ steps.pre.outputs.flag }}
         run: |
-          gh release create "${{ steps.chart.outputs.tag }}" \
-            --repo "${{ github.repository }}" \
-            --title "${{ steps.chart.outputs.tag }}" \
-            --generate-notes ${{ steps.pre.outputs.flag }} \
-            *.tgz
+          set -euo pipefail
+          shopt -s nullglob
+          tgz_files=(*.tgz)
+          if [ "${#tgz_files[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one .tgz file to release, found ${#tgz_files[@]}: ${tgz_files[*]}"
+            exit 1
+          fi
+
+          release_args=(--title "$TAG" --generate-notes)
+          if [ -n "$PRERELEASE_FLAG" ]; then
+            release_args+=("$PRERELEASE_FLAG")
+          fi
+
+          gh release create "$TAG" "${release_args[@]}" "${tgz_files[0]}"
 
       - name: Sync chart to nebari-dev/helm-repository
         if: steps.exists.outputs.exists == 'false'
