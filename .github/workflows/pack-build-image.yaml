@@ -48,6 +48,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -87,6 +89,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: ${{ inputs.context }}
@@ -98,3 +101,17 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:cache
           cache-to: ${{ inputs.push && format('type=registry,ref={0}:cache,mode=max', env.GHCR_IMAGE) || '' }}
+
+      - name: Sign + attest (GHCR)
+        if: ${{ inputs.push }}
+        uses: ./.github/actions/sign-oci
+        with:
+          image: ${{ env.GHCR_IMAGE }}
+          digest: ${{ steps.build.outputs.digest }}
+
+      - name: Sign + attest (Quay)
+        if: ${{ inputs.push }}
+        uses: ./.github/actions/sign-oci
+        with:
+          image: ${{ env.QUAY_IMAGE }}
+          digest: ${{ steps.build.outputs.digest }}
