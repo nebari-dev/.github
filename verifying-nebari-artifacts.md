@@ -18,11 +18,10 @@ token), so there is no public key to distribute. Verification instead checks
 that the Fulcio certificate was issued to the expected workflow identity by
 the expected OIDC issuer. This doc gives copy-pasteable commands for that.
 
-> This covers artifacts produced by a pack's own repo: its container images
-> and its release `.tgz`. It does **not** cover the canonical OCI Helm chart
-> published to `quay.io/nebari/charts` - see
-> [Phase 2: the canonical OCI Helm chart](#phase-2-the-canonical-oci-helm-chart)
-> below.
+> This covers three artifact types: a pack's container images, its release
+> `.tgz`, and the canonical OCI Helm chart published to `quay.io/nebari/charts`
+> (which has a different signer identity - see
+> [The canonical OCI Helm chart](#the-canonical-oci-helm-chart) below).
 
 ## Prerequisites
 
@@ -195,18 +194,35 @@ gh attestation verify oci://ghcr.io/nebari-dev/llm-serving-pack/operator@sha256:
 If the observed identity ever differs from what's documented here, this file
 is out of date - update it rather than working around it.
 
-## Phase 2: the canonical OCI Helm chart
+## The canonical OCI Helm chart
 
-`pack-release.yaml` only packages the chart as a `.tgz` GitHub Release asset
-and opens a PR to sync the chart source into
-[`nebari-dev/helm-repository`](https://github.com/nebari-dev/helm-repository).
-The canonical OCI chart pushed to `quay.io/nebari/charts` is produced later,
-by `helm-repository`'s own `release-helm-charts.yml` workflow, once that PR
-merges.
+`pack-release.yaml` signs the chart `.tgz` attached to the pack's GitHub Release
+(above). The chart consumers actually `helm install` is a **separate** artifact:
+the OCI chart pushed to `quay.io/nebari/charts` by
+[`nebari-dev/helm-repository`](https://github.com/nebari-dev/helm-repository)'s
+own `release-helm-charts.yml` workflow. That workflow signs and
+provenance-attests each OCI chart with the same `sign-oci` action (signature +
+SLSA provenance, but **no SBOM** - an SBOM of a Helm chart artifact is not
+meaningful).
 
-That means the OCI chart has a **different** signer identity from the one
-documented above: it will be a path inside `nebari-dev/helm-repository`, not
-`nebari-dev/.github`. Wiring `sign-oci` into that workflow is tracked as a
-follow-up (phase 2) and is not yet done as of this writing - there is nothing
-to verify at `quay.io/nebari/charts` yet. This doc will be updated with that
-identity and command once phase 2 ships.
+Because the signing happens inside `helm-repository`'s workflow, the OCI chart's
+signer identity is `release-helm-charts.yml` in **that** repo - distinct from the
+`pack-build-image.yaml` / `pack-release.yaml` identities above. Verify the
+signature:
+
+```bash
+cosign verify quay.io/nebari/charts/<chart>:<version> \
+  --certificate-identity-regexp "https://github.com/nebari-dev/helm-repository/\.github/workflows/release-helm-charts\.yml@.*" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+```
+
+And the build provenance:
+
+```bash
+gh attestation verify oci://quay.io/nebari/charts/<chart>@sha256:<digest> \
+  --repo nebari-dev/helm-repository \
+  --signer-workflow nebari-dev/helm-repository/.github/workflows/release-helm-charts.yml
+```
+
+The identity uses `@.*` because the exact ref depends on how the release ran
+(e.g. `@refs/heads/main`); match on the workflow path, not a fixed ref.
