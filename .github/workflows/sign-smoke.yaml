@@ -82,3 +82,46 @@ jobs:
             --predicate-type https://spdx.dev/Document/v2.3 \
             --format json \
             | jq -e '.[0].verificationResult.statement.predicate.packages | length > 0'
+
+  chart:
+    name: sign-blob smoke (chart)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Package a dummy chart
+        id: pkg
+        run: |
+          set -euo pipefail
+          helm create smokechart
+          helm package smokechart --destination .
+          echo "tgz=$(ls smokechart-*.tgz)" >> "$GITHUB_OUTPUT"
+
+      - name: Sign + attest the .tgz
+        id: sign
+        uses: ./.github/actions/sign-blob
+        with:
+          path: ${{ steps.pkg.outputs.tgz }}
+
+      - name: Verify blob signature
+        env:
+          TGZ: ${{ steps.pkg.outputs.tgz }}
+          BUNDLE: ${{ steps.sign.outputs.bundle }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cosign verify-blob --bundle "$BUNDLE" \
+            --certificate-identity-regexp "https://github.com/$REPO/.github/workflows/sign-smoke.yaml@.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$TGZ"
