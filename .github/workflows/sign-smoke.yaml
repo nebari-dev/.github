@@ -1,13 +1,22 @@
 name: sign-smoke
 
 # Exercises the sign-oci / sign-blob actions end-to-end against throwaway
-# artifacts on every push to a signing-work branch, and on demand. Proves
-# journeys 1-5. Signs against ghcr only (this repo has no quay creds).
+# artifacts whenever the sign actions/workflow change (push to main, or PR),
+# and on demand. Proves journeys 1-5. Signs against ghcr only (this repo has
+# no quay creds).
 
 on:
   push:
-    branches:
-      - "feat/reusable-signing-actions"
+    branches: [main]
+    paths:
+      - ".github/actions/**"
+      - ".github/workflows/sign-smoke.yaml"
+      - ".github/workflows/smoke-image/**"
+  pull_request:
+    paths:
+      - ".github/actions/**"
+      - ".github/workflows/sign-smoke.yaml"
+      - ".github/workflows/smoke-image/**"
   workflow_dispatch:
 
 env:

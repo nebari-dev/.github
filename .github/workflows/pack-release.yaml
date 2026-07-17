@@ -212,7 +212,7 @@ jobs:
       - name: Sign + attest chart
         id: sign
         if: steps.exists.outputs.exists == 'false'
-        uses: ./.github/actions/sign-blob
+        uses: ./_dot-github/.github/actions/sign-blob
         with:
           path: ${{ steps.tgz.outputs.path }}
 
