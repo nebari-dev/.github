@@ -41,12 +41,14 @@ steps** - not the pack repo that called it. GitHub's OIDC token includes a
 `job_workflow_ref` claim specifically for this case:
 
 > "For jobs using a reusable workflow, the ref path to the reusable workflow."
+>
 > - [GitHub Actions OIDC reference](https://docs.github.com/en/actions/reference/security/oidc)
 
 > "If a job is part of a reusable workflow, the token will include the
 > standard claims that contain information about the calling workflow, and
 > will also include a custom claim called `job_workflow_ref` that contains
 > information about the called workflow."
+>
 > - [Using OpenID Connect with reusable workflows](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-with-reusable-workflows)
 
 Fulcio, in turn, maps that claim onto the certificate's Subject Alternative
@@ -55,6 +57,7 @@ Name via the "Build Signer URI" extension:
 > "Reference to specific build instructions that are responsible for
 > signing. SHOULD be fully qualified. MAY be the same as Build Config URI."
 > Example: `https://github.com/slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v1.4.0`
+>
 > - [Fulcio OID information](https://github.com/sigstore/fulcio/blob/main/docs/oid-info.md)
 
 and a maintainer discussion on `sigstore/cosign` confirms this in practice for
