@@ -65,7 +65,11 @@ on:
           release's sha-<short-sha> tag, for example:
             operator.image.tag
             worker.image.tag
-        required: true
+          Optional. Charts that don't ship first-party images (e.g. charts
+          that only reference third-party base images) can omit this or
+          pass an empty string.
+        required: false
+        default: ""
         type: string
     secrets:
       NEBARI_HELM_REPO_TOKEN:
@@ -165,10 +169,14 @@ jobs:
 
           short_sha="${GITHUB_SHA::7}"
           mapfile -t paths < <(printf '%s\n' "$TAG_PATHS" | sed '/^[[:space:]]*$/d')
-          echo "Pinning ${#paths[@]} path(s) to sha-${short_sha}: ${paths[*]}"
 
-          python3 _dot-github/.github/scripts/pin_image_tags.py \
-            "${CHART_PATH}/values.yaml" "sha-${short_sha}" "${paths[@]}"
+          if [ "${#paths[@]}" -eq 0 ]; then
+            echo "No tag paths configured — skipping image tag pinning"
+          else
+            echo "Pinning ${#paths[@]} path(s) to sha-${short_sha}: ${paths[*]}"
+            python3 _dot-github/.github/scripts/pin_image_tags.py \
+              "${CHART_PATH}/values.yaml" "sha-${short_sha}" "${paths[@]}"
+          fi
 
       - name: Set up Helm
         if: steps.exists.outputs.exists == 'false'
