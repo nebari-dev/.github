@@ -1,0 +1,187 @@
+name: sign-smoke
+
+# Exercises the sign-oci / sign-blob actions end-to-end against throwaway
+# artifacts whenever the sign actions/workflow change (push to main, or PR),
+# and on demand. Proves journeys 1-5. Signs against ghcr only (this repo has
+# no quay creds).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/actions/**"
+      - ".github/workflows/sign-smoke.yaml"
+      - ".github/workflows/smoke-image/**"
+  pull_request:
+    paths:
+      - ".github/actions/**"
+      - ".github/workflows/sign-smoke.yaml"
+      - ".github/workflows/smoke-image/**"
+  workflow_dispatch:
+
+env:
+  # github.repository for this repo is "nebari-dev/.github". A path segment
+  # cannot start with a dot per the OCI/Docker reference-name grammar
+  # (path-component must start with [a-z0-9]), so ghcr.io/<repo>/sign-smoke
+  # would be an invalid reference. Use repository_owner + a sanitized name.
+  SMOKE_IMAGE: ghcr.io/${{ github.repository_owner }}/dot-github-sign-smoke
+
+jobs:
+  image:
+    name: sign-oci smoke (image)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push throwaway image
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .github/workflows/smoke-image
+          push: true
+          tags: ${{ env.SMOKE_IMAGE }}:${{ github.sha }}
+
+      - name: Sign + attest
+        uses: ./.github/actions/sign-oci
+        with:
+          image: ${{ env.SMOKE_IMAGE }}
+          digest: ${{ steps.build.outputs.digest }}
+
+      - name: Verify signature
+        env:
+          REF: ${{ env.SMOKE_IMAGE }}@${{ steps.build.outputs.digest }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cosign verify "$REF" \
+            --certificate-identity-regexp "https://github.com/$REPO/.github/workflows/sign-smoke.yaml@.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+
+      - name: Verify provenance attestation
+        env:
+          REF: ${{ env.SMOKE_IMAGE }}@${{ steps.build.outputs.digest }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh attestation verify "oci://$REF" --repo "$REPO"
+
+      - name: Verify SBOM attestation has packages
+        env:
+          REF: ${{ env.SMOKE_IMAGE }}@${{ steps.build.outputs.digest }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh attestation verify "oci://$REF" --repo "$REPO" \
+            --predicate-type https://spdx.dev/Document/v2.3 \
+            --format json \
+            | jq -e '.[0].verificationResult.statement.predicate.packages | length > 0'
+
+  chart:
+    name: sign-blob smoke (chart)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: Package a dummy chart
+        id: pkg
+        run: |
+          set -euo pipefail
+          helm create smokechart
+          helm package smokechart --destination .
+          echo "tgz=$(ls smokechart-*.tgz)" >> "$GITHUB_OUTPUT"
+
+      - name: Sign + attest the .tgz
+        id: sign
+        uses: ./.github/actions/sign-blob
+        with:
+          path: ${{ steps.pkg.outputs.tgz }}
+
+      - name: Verify blob signature
+        env:
+          TGZ: ${{ steps.pkg.outputs.tgz }}
+          BUNDLE: ${{ steps.sign.outputs.bundle }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cosign verify-blob --bundle "$BUNDLE" \
+            --certificate-identity-regexp "https://github.com/$REPO/.github/workflows/sign-smoke.yaml@.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$TGZ"
+
+  negative:
+    name: negative cases (must fail closed)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Prepare payload
+        run: echo "original" > payload.txt
+
+      - name: Sign a blob
+        id: sign
+        uses: ./.github/actions/sign-blob
+        with:
+          path: payload.txt
+
+      - name: Tampered artifact must fail
+        env:
+          BUNDLE: ${{ steps.sign.outputs.bundle }}
+        run: |
+          set -euo pipefail
+          echo "tampered" > payload.txt
+          if cosign verify-blob --bundle "$BUNDLE" \
+               --certificate-identity-regexp ".*" \
+               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+               payload.txt; then
+            echo "::error::verify-blob accepted a tampered file"; exit 1
+          fi
+          echo "OK: tamper rejected"
+
+      - name: Wrong identity must fail
+        env:
+          BUNDLE: ${{ steps.sign.outputs.bundle }}
+        run: |
+          set -euo pipefail
+          echo "original" > payload.txt
+          if cosign verify-blob --bundle "$BUNDLE" \
+               --certificate-identity-regexp "https://github.com/some-other-org/.*" \
+               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+               payload.txt; then
+            echo "::error::verify-blob accepted a wrong identity"; exit 1
+          fi
+          echo "OK: wrong identity rejected"

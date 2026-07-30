@@ -15,3 +15,11 @@ paths:
       # ships support for the job workflow-identity properties.
       - 'property "workflow_repository" is not defined in object type'
       - 'property "workflow_sha" is not defined in object type'
+  .github/workflows/pack-build-image.yaml:
+    ignore:
+      # Same job.workflow_repository/job.workflow_sha checkout pattern as
+      # pack-release.yaml above (this workflow's composite sign actions must
+      # also be loaded from a checkout of this repo, not the caller's) --
+      # same actionlint gap, see the comment on the pack-release.yaml entry.
+      - 'property "workflow_repository" is not defined in object type'
+      - 'property "workflow_sha" is not defined in object type'

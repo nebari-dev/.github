@@ -42,6 +42,13 @@ name: pack-release
 # workflow deliberately does not add its own ensure-quay-repos step: it
 # has no access to that token, and calling it here would be redundant
 # with (and could race) the downstream automation that already runs it.
+#
+# Sync opt-out: callers can set `sync: false` to run the full release path
+# (read version, pin tags, package, sign/attest, GitHub Release) WITHOUT
+# syncing the chart into nebari-dev/helm-repository -- useful for
+# test/non-product callers (e.g. an integration test bed) that must not
+# publish to the shared catalog. Defaults to true (unchanged behavior).
+# NEBARI_HELM_REPO_TOKEN is only needed when sync is true.
 
 on:
   workflow_call:
@@ -71,12 +78,22 @@ on:
         required: false
         default: ""
         type: string
+      sync:
+        description: >-
+          Sync the packaged chart to nebari-dev/helm-repository. Set false to
+          skip publishing to the shared catalog (e.g. test/non-product callers)
+          while still running packaging, signing, attestation, and the GitHub
+          Release.
+        required: false
+        type: boolean
+        default: true
     secrets:
       NEBARI_HELM_REPO_TOKEN:
         description: >-
           Fine-grained PAT with contents + pull-request write on
-          nebari-dev/helm-repository. Used only by the sync-chart step.
-        required: true
+          nebari-dev/helm-repository. Used only by the sync-chart step, so it
+          is only required when `sync` is true.
+        required: false
 
 jobs:
   release:
@@ -84,6 +101,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -203,6 +222,25 @@ jobs:
             *) echo "flag=" >> "$GITHUB_OUTPUT" ;;
           esac
 
+      - name: Locate packaged chart
+        id: tgz
+        if: steps.exists.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(*.tgz)
+          if [ "${#files[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one .tgz, found ${#files[@]}"; exit 1
+          fi
+          echo "path=${files[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign + attest chart
+        id: sign
+        if: steps.exists.outputs.exists == 'false'
+        uses: ./_dot-github/.github/actions/sign-blob
+        with:
+          path: ${{ steps.tgz.outputs.path }}
+
       - name: Create GitHub Release
         if: steps.exists.outputs.exists == 'false'
         env:
@@ -210,6 +248,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.chart.outputs.tag }}
           PRERELEASE_FLAG: ${{ steps.pre.outputs.flag }}
+          BUNDLE: ${{ steps.sign.outputs.bundle }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -224,10 +263,13 @@ jobs:
             release_args+=("$PRERELEASE_FLAG")
           fi
 
-          gh release create "$TAG" "${release_args[@]}" "${tgz_files[0]}"
+          gh release create "$TAG" "${release_args[@]}" \
+            "${tgz_files[0]}" \
+            "$BUNDLE" \
+            "${tgz_files[0]}.spdx.json"
 
       - name: Sync chart to nebari-dev/helm-repository
-        if: steps.exists.outputs.exists == 'false'
+        if: steps.exists.outputs.exists == 'false' && inputs.sync
         uses: nebari-dev/helm-repository/.github/actions/sync-chart@5cbd23a45c014bf2fa34b4683d4e5ac70ad34fa4 # main 2026-07-03
         with:
           token: ${{ secrets.NEBARI_HELM_REPO_TOKEN }}
