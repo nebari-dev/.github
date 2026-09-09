@@ -2,21 +2,39 @@
 name: "Request for Discussion (RFD) 💬"
 about: Open discussion about a feature or design project in Nebari.
 labels:
-  - "type: RFD"
+  - "type: RFD 🗳"
+  - "needs: discussion 💬"
 title: "RFD - Title"
 ---
 
 <!-- Example of when and how to create a RFD or RFC (request for comments) -->
 <!-- https://gitpod.notion.site/Decision-Making-RFCs-eb4a57f3a34f40f1afbd95e05322af70 -->
 
-<!-- Use this guide to set the status: Draft 🚧 / Open for comments 💬/ Accepted ✅ /Implemented 🚀/ Obsolete 🗃 /  Rejected ⛔️ -->
+<!--
+Set the Status row below to where this RFD actually is. Each status has exactly one
+matching label, and an RFD carries exactly one status label at a time:
 
-| Status            | Draft 🚧 / Open for comments 💬/ Accepted ✅ /Implemented 🚀/ Obsolete 🗃 / Rejected ⛔️ |
-| ----------------- | --------------------------------------------------------------------------------------- |
-| Author(s)         | GitHub handle                                                                           |
-| Date Created      | dd-MM-YYY                                                                               |
-| Date Last updated | dd-MM-YYY                                                                               |
-| Decision deadline | dd-MM-YYY                                                                               |
+  Draft 🚧             no status label (remove "needs: discussion 💬")
+  Open for comments 💬  needs: discussion 💬     <- this template's default
+  Being voted 🗳        status: being voted 🗳
+  Accepted ✅           status: approved 💪🏾
+  Implemented 🚀        status: approved 💪🏾, and close the issue
+  Rejected ⛔️          status: declined 🙅🏻‍♀️
+  Obsolete 🗃           status: declined 🙅🏻‍♀️, and close the issue
+
+"type: RFD 🗳" stays on the issue for its whole life. Where this row and the labels
+disagree, this row wins and the labels should be corrected to match it.
+
+The canonical lifecycle is defined in nebari-dev/governance:
+https://github.com/nebari-dev/governance/blob/main/GOVERNANCE.md#rfd-lifecycle
+-->
+
+| Status            | Open for comments 💬 |
+| ----------------- | -------------------- |
+| Author(s)         | GitHub handle        |
+| Date Created      | dd-MM-YYYY           |
+| Date Last updated | dd-MM-YYYY           |
+| Decision deadline | dd-MM-YYYY           |
 
 # Title
 
