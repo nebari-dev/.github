@@ -15,8 +15,6 @@ group:
           release-checklist.md
           testing-checklist.md
         deleteOrphaned: true
-      - source: LICENSE
-        dest: LICENSE
       - source: CONTRIBUTING.md
         dest: CONTRIBUTING.md
     repos: |
