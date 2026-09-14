@@ -2,14 +2,10 @@ name: lint-test
 
 # CI for this repo's own reusable workflows and helper scripts.
 #
-# Scoped to the workflows introduced/maintained under this effort
-# (pack-build-image.yaml, pack-release.yaml, sign-smoke.yaml, and this
-# file) rather than the whole .github/workflows/ directory: the other
-# pre-existing workflows here (sync-issue-templates.yaml, sync-project-priority.yaml)
-# already have unrelated actionlint findings (a floating, EOL
-# actions/checkout@v3 pin and a few shellcheck info-level notes) that
-# predate this change and are out of scope for it. Widen the file list
-# below once those are cleaned up separately.
+# An explicit file list rather than the whole .github/workflows/ directory:
+# sync-issue-templates.yaml still carries a pre-existing floating, EOL
+# actions/checkout@v3 pin that is out of scope here. Add it below once that
+# is cleaned up.
 
 on:
   pull_request:
@@ -34,7 +30,8 @@ jobs:
             .github/workflows/pack-build-image.yaml \
             .github/workflows/pack-release.yaml \
             .github/workflows/lint-test.yaml \
-            .github/workflows/sign-smoke.yaml
+            .github/workflows/sign-smoke.yaml \
+            .github/workflows/sync-project-priority.yaml
 
   pytest:
     name: pytest

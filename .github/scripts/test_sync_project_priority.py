@@ -35,6 +35,10 @@ HIGH = "priority: high \U0001f525"
 LOW = "priority: low \U0001f331"
 DISCUSSION = "needs: discussion \U0001f4ac"
 AREA_CI = "area: ci \U0001f527"
+# Labels that contain "priority: " but do not start with it. The step anchors
+# its match to the start of the label name, so neither is a priority label.
+PHRASE = "blocked by priority: high \U0001f525"
+HYPHENATED = "de-priority: high \U0001f525"
 
 # A stub `gh` that records every invocation as one JSON line and answers with a
 # response shaped like the real GraphQL API, so the step's `--jq` still works.
@@ -147,6 +151,12 @@ CASES = [
     # Only the exact "priority: " prefix counts.
     ("lookalike_label_removed", [], "unlabeled", "prioritisation notes", []),
     ("prefix_without_separator_removed", [], "unlabeled", "priority:high", []),
+    # ...and it has to be a prefix. A label that merely contains "priority: "
+    # somewhere inside it is an ordinary label, so it neither sets the field
+    # nor authorises a clear.
+    ("priority_text_inside_phrase_added", [PHRASE], "labeled", PHRASE, []),
+    ("hyphenated_priority_text_added", [HYPHENATED], "labeled", HYPHENATED, []),
+    ("priority_text_inside_phrase_removed", [], "unlabeled", PHRASE, []),
 ]
 
 

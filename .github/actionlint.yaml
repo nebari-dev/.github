@@ -23,3 +23,12 @@ paths:
       # same actionlint gap, see the comment on the pack-release.yaml entry.
       - 'property "workflow_repository" is not defined in object type'
       - 'property "workflow_sha" is not defined in object type'
+  .github/workflows/sync-project-priority.yaml:
+    ignore:
+      # Every GraphQL query in this workflow is single-quoted on purpose: the
+      # $p/$i/$f/$o inside are GraphQL variable references that must reach the
+      # API literally, not shell variables. Their values are passed separately
+      # via `gh api graphql -F/-f`. shellcheck cannot tell the two kinds of `$`
+      # apart, so each query body trips SC2016. Drop this entry if the queries
+      # ever stop using GraphQL variables.
+      - "shellcheck reported issue in this script: SC2016:.+"

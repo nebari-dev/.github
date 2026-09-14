@@ -3,6 +3,13 @@ name: Sync project priority from labels
 # Reusable workflow: adds an issue or PR to a Projects v2 board and syncs the
 # Priority single-select field based on labels of the form "priority: <level>".
 #
+# The sync is deliberately asymmetric. A "priority: <level>" label sets the
+# field on any event, but the field is cleared only when an "unlabeled" event
+# removes a "priority: " label and none remains on the item. The field
+# is also set by hand on the board, so treating "this item carries no priority
+# label" as "clear it" would wipe a manual value every time an unrelated label
+# was added or removed.
+#
 # Triggered by caller repos on issues and pull_request_target events
 # (opened, labeled, unlabeled). The caller passes the project's GraphQL node ID
 # and a PAT with project: write scope.

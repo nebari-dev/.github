@@ -38,6 +38,9 @@ Below is a quick list of what you'll find in this repository:
   > **Note**
   > For the PR trigger, callers must use `pull_request_target`, **not** `pull_request`. PRs opened from forks do not receive secrets under `pull_request`, so the PAT is empty and the job fails. `pull_request_target` runs in the base repo's context, making the secret available. This is safe because the workflow checks out no PR code — it only reads trusted event metadata and calls the GitHub API.
 
+  > **Note**
+  > Setting and clearing are not symmetric. A `priority: <level>` label sets the field on any event the caller subscribes to, but the field is cleared only when an `unlabeled` event removes a `priority: ` label and no priority label remains on the item. Every other event leaves the field alone. This matters because the `Priority` field is also set by hand on the board: treating "this item carries no priority label" as "clear it" would wipe a manual value whenever an unrelated label was added or removed.
+
 > **Warning**
 > The syncing action requires a Personal Authentication Token (PAT) which is currently set up through [Nebari-sensei](https://github.com/nebari-sensei)
 
