@@ -1,7 +1,7 @@
 # Welcome to Nebari! 👋
 
 <a href="https://nebari.dev">
-    <img src="https://raw.githubusercontent.com/nebari-dev/.github/main/profile/nebari-banner.svg" alt="A banner showing the Nebari logo with the tagline 'A data science platform: Built for scale, designed for collaboration.' This is followed by a get started button pointing to nebari.dev."/>
+    <img src="https://raw.githubusercontent.com/nebari-dev/.github/main/profile/nebari-banner.svg" alt="A banner showing the Nebari logo with the tagline 'Enterprise-ready AI Platform. Composable. Extensible. Open Source.' This is followed by a get started button pointing to nebari.dev."/>
 </a>
 
 ---
