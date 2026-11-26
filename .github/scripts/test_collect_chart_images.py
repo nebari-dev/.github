@@ -488,3 +488,88 @@ def test_non_utf8_render_is_not_yaml(tmp_path, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "not YAML" in captured.err
+
+
+UNSAFE_REFS = [
+    pytest.param("redis:7\n::set-output name=result::clean", id="newline"),
+    pytest.param("redis:7\tx", id="tab"),
+    pytest.param("redis 7", id="space"),
+    pytest.param("redis:7\x1b[31m", id="control-char"),
+    pytest.param("redis:7\x00", id="nul"),
+    pytest.param("--config=x", id="leading-dash"),
+    pytest.param("redis:7\u202e", id="bidi-override"),
+    pytest.param("re\u200bdis:7", id="zero-width-space"),
+]
+
+
+def _render_with(tmp_path, ref, via):
+    rendered = tmp_path / "rendered.yaml"
+    if via == "extra":
+        rendered.write_text(textwrap.dedent(DEPLOYMENT))
+        return rendered, ["--extra-image=" + ref]
+    doc = {"kind": "Pod", "spec": {"containers": [{"name": "c", "image": "busybox:1"}]}}
+    if via == "image":
+        doc["spec"]["containers"].append({"name": "bad", "image": ref})
+    elif via == "env":
+        doc["spec"]["containers"][0]["env"] = [{"name": "X_IMAGE", "value": ref}]
+    elif via == "imageName":
+        doc["spec"]["imageName"] = ref
+    rendered.write_text(json.dumps(doc))  # JSON is YAML and escapes control chars
+    return rendered, []
+
+
+@pytest.mark.parametrize("via", ["image", "env", "imageName", "extra"])
+@pytest.mark.parametrize("ref", UNSAFE_REFS)
+def test_unsafe_ref_exits_1(tmp_path, capsys, ref, via):
+    rendered, extra = _render_with(tmp_path, ref, via)
+    args = ["collect_chart_images.py", "--rendered", str(rendered), "--leg", "source"]
+    assert main(args + extra) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    err_lines = captured.err.splitlines()
+    assert len(err_lines) == 1
+    assert repr(ref) in err_lines[0]
+
+
+@pytest.mark.parametrize("via", ["image", "env", "imageName", "extra"])
+def test_safe_ref_still_accepted(tmp_path, capsys, via):
+    ref = "ghcr.io/nebari-dev/openmeter:v1.0.0-beta.239-nebari.1@" + DIGEST
+    rendered, extra = _render_with(tmp_path, ref, via)
+    args = ["collect_chart_images.py", "--rendered", str(rendered), "--leg", "source"]
+    assert main(args + extra) == 0
+    refs = [e["ref"] for e in json.loads(capsys.readouterr().out)["include"]]
+    assert ref in refs
+
+
+def test_one_line_per_unsafe_ref(tmp_path, capsys):
+    rendered = tmp_path / "rendered.yaml"
+    rendered.write_text(textwrap.dedent(DEPLOYMENT))
+    args = ["collect_chart_images.py", "--rendered", str(rendered), "--leg", "source",
+            "--extra-image", "a b", "--extra-image=-x"]
+    assert main(args) == 1
+    assert len(capsys.readouterr().err.splitlines()) == 2
+
+
+@pytest.mark.parametrize("ref", UNSAFE_REFS)
+def test_slug_mode_rejects_unsafe_ref(capsys, ref):
+    assert main(["collect_chart_images.py", "--slug=" + ref]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert repr(ref) in captured.err
+    assert len(captured.err.splitlines()) == 1
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        pytest.param(["--slug", "--config=x"], id="slug"),
+        pytest.param(
+            ["--rendered", "r.yaml", "--leg", "source", "--extra-image", "-x"],
+            id="extra-image",
+        ),
+    ],
+)
+def test_separated_dash_value_is_usage_error(capsys, args):
+    # argparse reads a separated value starting with "-" as an option.
+    assert main(["collect_chart_images.py", *args]) == 2
+    assert capsys.readouterr().out == ""

@@ -32,14 +32,20 @@ Each matrix entry carries:
 --slug REF prints the slug of REF's repository, the same value the matrix
 uses for any reference to that repository.
 
+A reference that contains whitespace, a control or format character, or
+starts with "-", is rejected (here and in --slug mode): it comes from a render the
+pull request controls and would reach job names, workflow commands and
+the scanner's argv.
+
 Exit codes: 0 matrix JSON on stdout, 1 nothing found, the input is not
-UTF-8 YAML, or two references in the leg share a slug (one stderr line per
+UTF-8 YAML, an unsafe reference, or two references in the leg share a slug (one stderr line per
 slug, naming the references), 2 usage error or unreadable file.
 """
 import argparse
 import json
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
@@ -116,6 +122,25 @@ def _walk(node: Any, env_regex: re.Pattern[str], found: list[str]) -> None:
 def _add(value: Any, found: list[str]) -> None:
     if isinstance(value, str) and value.strip():
         found.append(value.strip())
+
+
+def unsafe_refs(refs: Sequence[str]) -> list[str]:
+    """Return one message per reference unsafe to pass on.
+
+    References come from a render a pull request controls and end up in
+    job names, workflow command lines and the scanner's argv. One with
+    whitespace or a control character could inject a workflow command;
+    one starting with "-" would be read as an option. A format character
+    (bidi override, zero-width space) could make a name misleading. The reference is
+    shown with repr() so the message itself cannot inject.
+    """
+    return [
+        f"unsafe image reference {ref!r}: "
+        "contains whitespace, a control or format character, or starts with '-'"
+        for ref in refs
+        if ref.startswith("-")
+        or any(c.isspace() or unicodedata.category(c) in ("Cc", "Cf") for c in ref)
+    ]
 
 
 def collect(
@@ -206,6 +231,11 @@ def main(argv: Sequence[str]) -> int:
         return 2 if exc.code else 0
 
     if args.slug is not None:
+        problems = unsafe_refs([args.slug])
+        for message in problems:
+            print(f"collect_chart_images: error: {message}", file=sys.stderr)
+        if problems:
+            return 1
         print(slugify(_split_ref(args.slug)[0]))
         return 0
     if args.rendered is None or args.leg is None:
@@ -228,6 +258,11 @@ def main(argv: Sequence[str]) -> int:
     refs = collect(documents, args.env_regex, args.extra_image)
     if not refs:
         print("collect_chart_images: error: no images found", file=sys.stderr)
+        return 1
+    problems = unsafe_refs(refs)
+    for message in problems:
+        print(f"collect_chart_images: error: {message}", file=sys.stderr)
+    if problems:
         return 1
     entries = build_entries(
         refs, args.leg, args.own_prefix, args.first_party_prefix

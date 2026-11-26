@@ -18,10 +18,13 @@ name: pack-scan-images
 #     repo, or under a first-party-prefixes entry): scanned with the
 #     caller's ignorefile; any finding fails the job. On pull_request only,
 #     the calling repo's own image referenced by tag latest or no tag, with
-#     no digest (own-floating), is reported and its job passes: it was built
-#     from main, and the PR's build-time scan gates whatever the PR rebuilds.
+#     no digest (own-floating), has its findings reported and its job passes
+#     unless the scan errored: it was built from main, and the PR's
+#     build-time scan gates whatever the PR rebuilds.
 #   - third-party (everything else): scanned with no ignore file. For now
-#     the job fails only when the scan errors; findings are reported.
+#     its findings are reported only.
+# A scan that errors (image not pullable, Trivy failed, bad ignore file)
+# fails its job whatever the origin and trigger.
 #
 # Callers grant contents: read and security-events: write.
 
@@ -240,8 +243,12 @@ jobs:
         if: ${{ matrix.origin == 'third-party' && steps.scan.outputs.result == 'findings' }}
         run: echo "Freshness rule not implemented yet; third-party findings are reported only."
 
-      - name: Fail on a third-party scan error
-        if: ${{ matrix.origin == 'third-party' && steps.scan.outputs.result == 'error' }}
+      # An errored scan always fails the job. With fail-on-findings "true"
+      # the Scan step has already failed it; this catches the "false" cases
+      # (third-party images, and own latest images on pull_request), where
+      # trivy-scan turns an error into a warning and exits 0.
+      - name: Fail on a scan error
+        if: ${{ steps.scan.outputs.result == 'error' }}
         run: |
-          echo "::error::The scan of this third-party image did not complete; see the job summary."
+          echo "::error::The scan of this image did not complete; see the job summary."
           exit 1
