@@ -1,0 +1,359 @@
+name: trivy-scan
+description: >-
+  Scan one image for fixable CRITICAL and HIGH vulnerabilities on linux/amd64
+  with a pinned Trivy release, write a findings table to the job summary, and
+  report clean, findings or error. Needs no permissions and uploads nothing.
+
+inputs:
+  image-ref:
+    description: "Registry reference to scan. Exactly one of image-ref and input must be set."
+    required: false
+    default: ""
+  input:
+    description: "Path to an OCI layout directory (buildx --output type=oci,tar=false). Exactly one of image-ref and input must be set."
+    required: false
+    default: ""
+  ignorefile:
+    description: "Trivy YAML ignore file. Linted and used only if the file exists. Empty means no ignore file."
+    required: false
+    default: ".trivyignore.yaml"
+  fail-on-findings:
+    description: "\"true\": exit non-zero unless the result is clean. \"false\": always exit 0 and report through result and a warning."
+    required: false
+    default: "true"
+  sarif-file:
+    description: "When set, SARIF is also written to this path."
+    required: false
+    default: ""
+  findings-file:
+    description: "Not implemented yet. Setting it gives result=error."
+    required: false
+    default: ""
+  baseline:
+    description: "Not implemented yet. Setting it gives result=error."
+    required: false
+    default: ""
+  title:
+    description: "Job summary heading. Defaults to the scan target."
+    required: false
+    default: ""
+
+outputs:
+  result:
+    description: "clean, findings, or error (bad inputs, ignore-file lint problems, or Trivy could not run)."
+    value: ${{ steps.report.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    # Every step below exits 0 and reports through its outputs (ok, error),
+    # so that the final report step always runs and alone decides the exit
+    # code from fail-on-findings.
+    - name: Check inputs
+      id: validate
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image-ref }}
+        INPUT: ${{ inputs.input }}
+        FINDINGS_FILE: ${{ inputs.findings-file }}
+        BASELINE: ${{ inputs.baseline }}
+      run: |
+        set -euo pipefail
+        err=""
+        if [[ -n "$IMAGE_REF" && -n "$INPUT" ]] || [[ -z "$IMAGE_REF" && -z "$INPUT" ]]; then
+          err="exactly one of image-ref and input must be set"
+        elif [[ -n "$FINDINGS_FILE" ]]; then
+          err="findings-file is not implemented yet"
+          echo "::error::trivy-scan: $err"
+        elif [[ -n "$BASELINE" ]]; then
+          err="baseline is not implemented yet"
+          echo "::error::trivy-scan: $err"
+        fi
+        # Trivy DB cache key: one slot per 6 hours, UTC (PD7).
+        read -r day hour < <(date -u '+%F %H')
+        {
+          echo "cache-key=trivy-db-v0.76.2-${day}-$(( 10#$hour / 6 ))"
+          if [[ -n "$err" ]]; then
+            echo "ok=false"
+            echo "error=$err"
+          else
+            echo "ok=true"
+          fi
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Install Trivy v0.76.2
+      id: install
+      if: ${{ steps.validate.outputs.ok == 'true' }}
+      shell: bash
+      env:
+        TRIVY_URL: https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz
+        TRIVY_SHA256: bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+      run: |
+        set -uo pipefail
+        dl="$RUNNER_TEMP/trivy-dl"
+        bin="$RUNNER_TEMP/trivy-bin"
+        rm -rf "$dl" "$bin"
+        mkdir -p "$dl" "$bin"
+        tarball="$dl/trivy.tar.gz"
+        if ! curl -sSfL --retry 3 -o "$tarball" "$TRIVY_URL"; then
+          { echo "ok=false"; echo "error=could not download the Trivy release tarball"; } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if ! echo "$TRIVY_SHA256  $tarball" | sha256sum -c -; then
+          { echo "ok=false"; echo "error=Trivy release tarball sha256 does not match the pinned value"; } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if ! tar -xzf "$tarball" -C "$bin" trivy; then
+          { echo "ok=false"; echo "error=could not extract the Trivy binary"; } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        "$bin/trivy" --version
+        { echo "ok=true"; echo "trivy=$bin/trivy"; } >> "$GITHUB_OUTPUT"
+
+    - name: Restore Trivy DB cache
+      id: cache
+      if: ${{ steps.install.outputs.ok == 'true' }}
+      continue-on-error: true
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: ${{ runner.temp }}/trivy-cache
+        key: ${{ steps.validate.outputs.cache-key }}
+
+    - name: Download Trivy DBs
+      id: db
+      if: ${{ steps.install.outputs.ok == 'true' }}
+      shell: bash
+      env:
+        TRIVY: ${{ steps.install.outputs.trivy }}
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+      run: |
+        set -uo pipefail
+        if [[ "$CACHE_HIT" == "true" ]]; then
+          echo "Trivy DBs restored from cache."
+          { echo "ok=true"; echo "downloaded=false"; } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        cache_dir="$RUNNER_TEMP/trivy-cache"
+        # Up to three attempts with backoff, so a registry hiccup does not
+        # turn a PR build red (Review Focus 2).
+        waits=(10 30 60)
+        max_attempts=3
+        for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+          if "$TRIVY" image --download-db-only --cache-dir "$cache_dir" \
+              && "$TRIVY" image --download-java-db-only --cache-dir "$cache_dir"; then
+            { echo "ok=true"; echo "downloaded=true"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if (( attempt < max_attempts )); then
+            echo "Trivy DB download attempt $attempt of $max_attempts failed; retrying in ${waits[attempt-1]}s."
+            sleep "${waits[attempt-1]}"
+          fi
+        done
+        { echo "ok=false"; echo "error=Trivy DB download failed after $max_attempts attempts"; } >> "$GITHUB_OUTPUT"
+
+    - name: Save Trivy DB cache
+      if: ${{ steps.db.outputs.downloaded == 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: ${{ runner.temp }}/trivy-cache
+        key: ${{ steps.validate.outputs.cache-key }}
+
+    - name: Lint ignore file
+      id: lint
+      if: ${{ steps.db.outputs.ok == 'true' }}
+      shell: bash
+      env:
+        IGNOREFILE: ${{ inputs.ignorefile }}
+        LINT_SCRIPT: ${{ github.action_path }}/../../scripts/lint_trivyignore.py
+      run: |
+        set -uo pipefail
+        if [[ -z "$IGNOREFILE" || ! -f "$IGNOREFILE" ]]; then
+          echo "No ignore file to lint."
+          { echo "ok=true"; echo "ignorefile="; } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        venv="$RUNNER_TEMP/trivy-lint-venv"
+        if [[ ! -x "$venv/bin/python" ]]; then
+          if ! python3 -m venv "$venv"; then
+            rm -rf "$venv"
+            { echo "ok=false"; echo "error=could not create the ignore-file lint's venv"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Up to three attempts, as for the DB download: an index hiccup must
+          # not turn a PR build red. pip also retries each connection itself.
+          waits=(10 30)
+          max_attempts=3
+          for (( attempt = 1; ; attempt++ )); do
+            if "$venv/bin/python" -m pip install --quiet --disable-pip-version-check "ruamel.yaml==0.19.1"; then
+              break
+            fi
+            if (( attempt >= max_attempts )); then
+              rm -rf "$venv"
+              { echo "ok=false"; echo "error=could not install the ignore-file lint's dependencies after $max_attempts attempts"; } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "pip install attempt $attempt of $max_attempts failed; retrying in ${waits[attempt-1]}s."
+            sleep "${waits[attempt-1]}"
+          done
+        fi
+        rc=0
+        problems="$("$venv/bin/python" "$LINT_SCRIPT" "$IGNOREFILE" 2>&1)" || rc=$?
+        if (( rc == 0 )); then
+          echo "$IGNOREFILE: lint clean."
+          { echo "ok=true"; echo "ignorefile=$IGNOREFILE"; } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # Problem text comes from the ignore file (PR-controlled), so it goes
+        # to the output under a random heredoc delimiter, and the Report step
+        # prints it only inside a ::stop-commands:: block.
+        delim="EOF_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+        {
+          echo "ok=false"
+          echo "error=$IGNOREFILE failed the ignore-file lint (exit $rc)"
+          echo "problems<<$delim"
+          printf '%s\n' "$problems"
+          echo "$delim"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Scan
+      id: scan
+      if: ${{ steps.lint.outputs.ok == 'true' }}
+      shell: bash
+      env:
+        TRIVY: ${{ steps.install.outputs.trivy }}
+        IMAGE_REF: ${{ inputs.image-ref }}
+        INPUT: ${{ inputs.input }}
+        IGNOREFILE: ${{ steps.lint.outputs.ignorefile }}
+        SARIF_FILE: ${{ inputs.sarif-file }}
+      run: |
+        set -uo pipefail
+        json="$RUNNER_TEMP/trivy.json"
+        rm -f "$json"
+        if [[ -n "$INPUT" ]]; then
+          target=(--input "$INPUT")
+        else
+          target=("$IMAGE_REF")
+        fi
+        # An empty --ignorefile disables Trivy's implicit .trivyignore.
+        if ! "$TRIVY" image \
+            --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed --platform linux/amd64 \
+            --skip-db-update --skip-java-db-update --cache-dir "$RUNNER_TEMP/trivy-cache" \
+            --ignorefile "$IGNOREFILE" \
+            --format json --output "$json" \
+            "${target[@]}"; then
+          { echo "ok=false"; echo "error=Trivy could not scan the image"; } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if ! count="$(jq '[.Results[]?.Vulnerabilities[]?] | length' "$json")"; then
+          { echo "ok=false"; echo "error=could not read Trivy's JSON report"; } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [[ -n "$SARIF_FILE" ]] && ! "$TRIVY" convert --format sarif --output "$SARIF_FILE" "$json"; then
+          { echo "ok=false"; echo "error=could not convert the report to SARIF"; } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        { echo "ok=true"; echo "count=$count"; echo "json=$json"; } >> "$GITHUB_OUTPUT"
+
+    - name: Report
+      id: report
+      if: ${{ always() }}
+      shell: bash
+      env:
+        FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
+        TITLE: ${{ inputs.title || inputs.image-ref || inputs.input || 'trivy-scan' }}
+        ERR_VALIDATE: ${{ steps.validate.outputs.error }}
+        ERR_INSTALL: ${{ steps.install.outputs.error }}
+        ERR_DB: ${{ steps.db.outputs.error }}
+        ERR_LINT: ${{ steps.lint.outputs.error }}
+        LINT_PROBLEMS: ${{ steps.lint.outputs.problems }}
+        ERR_SCAN: ${{ steps.scan.outputs.error }}
+        SCAN_OK: ${{ steps.scan.outputs.ok }}
+        COUNT: ${{ steps.scan.outputs.count }}
+        JSON: ${{ steps.scan.outputs.json }}
+      run: |
+        set -uo pipefail
+        err=""
+        for e in "$ERR_VALIDATE" "$ERR_INSTALL" "$ERR_DB" "$ERR_LINT" "$ERR_SCAN"; do
+          if [[ -n "$e" ]]; then err="$e"; break; fi
+        done
+        if [[ -n "$err" ]]; then
+          result=error
+        elif [[ "$SCAN_OK" != "true" ]]; then
+          result=error
+          err="the scan did not run (an earlier step failed)"
+        elif (( COUNT > 0 )); then
+          result=findings
+        else
+          result=clean
+        fi
+        echo "result=$result" >> "$GITHUB_OUTPUT"
+
+        {
+          echo "### ${TITLE}"
+          echo
+          case "$result" in
+            clean)
+              echo "No fixable CRITICAL or HIGH vulnerabilities." ;;
+            findings)
+              echo "$COUNT fixable CRITICAL or HIGH vulnerabilities."
+              echo
+              echo "| CVE | Package | Installed | Fixed | Severity |"
+              echo "| --- | --- | --- | --- | --- |"
+              jq -r '[.Results[]?.Vulnerabilities[]?]
+                | sort_by(.Severity != "CRITICAL", .VulnerabilityID, .PkgName)[]
+                | [.VulnerabilityID, .PkgName, .InstalledVersion, .FixedVersion, .Severity]
+                | map(tostring | gsub("\\|"; "\\|"))
+                | "| " + join(" | ") + " |"' "$JSON" ;;
+            error)
+              echo "Scan error: ${err}"
+              if [[ -n "$LINT_PROBLEMS" ]]; then
+                # The fence is longer than any backtick run in the
+                # (PR-controlled) text, so the text cannot close it.
+                longest="$(printf '%s\n' "$LINT_PROBLEMS" | awk '{ while (match($0, /`+/)) { if (RLENGTH > m) m = RLENGTH; $0 = substr($0, RSTART + RLENGTH) } } END { print m + 0 }')"
+                fence='```'
+                while (( ${#fence} <= longest )); do fence+='`'; done
+                echo
+                echo "$fence"
+                printf '%s\n' "$LINT_PROBLEMS"
+                echo "$fence"
+              fi ;;
+          esac
+          echo
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # Lint problems come from the PR-controlled ignore file and package
+        # names from the scanned image, so both are printed with workflow
+        # commands turned off. The final ::warning::/::error:: stays outside.
+        if [[ "$result" == "findings" || -n "$LINT_PROBLEMS" ]]; then
+          token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::${token}"
+          # Any exit inside the block still turns commands back on.
+          trap 'echo "::${token}::"' EXIT
+          if [[ "$result" == "findings" ]]; then
+            echo "Findings (CVE, package, installed -> fixed, severity):"
+            jq -r '.Results[]?.Vulnerabilities[]?
+              | "  \(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion) \(.Severity)"' "$JSON" \
+              || echo "  (could not list the findings; see the job summary)"
+          fi
+          if [[ -n "$LINT_PROBLEMS" ]]; then
+            echo "Ignore-file lint problems:"
+            printf '%s\n' "$LINT_PROBLEMS" | sed 's/^/  /'
+          fi
+          echo "::${token}::"
+          trap - EXIT
+        fi
+
+        case "$result" in
+          clean) msg="" ;;
+          findings) msg="${TITLE}: $COUNT fixable CRITICAL or HIGH vulnerabilities (see the job summary)" ;;
+          *) msg="${TITLE}: scan error: ${err}" ;;
+        esac
+        if [[ "$result" == "clean" ]]; then
+          echo "${TITLE}: clean."
+        elif [[ "$FAIL_ON_FINDINGS" == "false" ]]; then
+          echo "::warning::${msg}"
+        else
+          echo "::error::${msg}"
+          exit 1
+        fi

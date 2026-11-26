@@ -1,0 +1,43 @@
+# Contracts
+
+Interfaces this repository promises to other repositories, and the files that
+use them. A PR that changes a contract updates its entry here in the same PR.
+
+### `pack-build-image.yaml` `workflow_call` interface
+**Owner:** nebari-dev/.github · **Consumers:** llm-serving-pack `build-images.yaml` (6 calls), apps-pack `images.yaml`, software-pack-template `build-images.yaml`, pack-testbed `build-images.yaml` (verified: `gh search code "pack-build-image.yaml@" --owner nebari-dev --json repository,path --jq ".[].repository.nameWithOwner" && grep -n "pack-build-image.yaml@" ../pack-testbed/.github/workflows/build-images.yaml`)
+**Inputs:** `image` (string, required: image name suffix), `context` (string, required: build context), `dockerfile` (string, default `<context>/Dockerfile`), `target` (string, default none), `platforms` (string, default `linux/amd64`), `push` (boolean, default `true`; `false` for pull request builds), `scan` (boolean, default `false`).
+**Secrets:** `QUAY_USERNAME` and `QUAY_TOKEN`, both optional, used only when `push` is true.
+**Requires of callers:** the calling job grants `contents: read`, `packages: write`, `id-token: write` and `attestations: write`. A caller without them fails at startup. With `scan: true`, nothing more; an optional `.trivyignore.yaml` at the repo root is linted and used.
+**Promises:**
+- Builds `context` for `platforms`. With `push: true` it pushes to `ghcr.io/<owner>/<repo>/<image>` and `quay.io/nebari/<repo>-<image>` with tags `sha-<short sha>` and, on the default branch, `latest`, then signs and attests both by digest.
+- With `scan: false` the job behaves as it did at `ad70045`.
+- With `scan: true` the job also exports a `linux/amd64` build of the same context, Dockerfile and target as an OCI layout directory in `$RUNNER_TEMP` (`provenance: false`, `sbom: false`, so no attestation manifest) and scans it with the `trivy-scan` action for fixable CRITICAL and HIGH vulnerabilities. Only `linux/amd64` is scanned, whatever `platforms` is. No SARIF is written at build time. The job summary lists each finding's CVE, package, installed version, fixed version and severity.
+- `push: false`: a finding, an ignore-file lint problem or a Trivy run that fails to execute fails the job (absolute gate: every fixable CRITICAL or HIGH finding blocks).
+- `push: true`: the scan never changes the job result. Findings, lint problems and Trivy execution failures become the job summary plus a warning annotation.
+- Step order is part of the promise: build; export (if `scan`); `_dot-github` checkout (if `push` or `scan`); sign GHCR and sign Quay (if `push`); scan (if `scan`). The export runs before the checkout, so the checkout never lands inside a build context, and signing runs before the scan, so a scan-tool failure cannot leave a pushed image unsigned. On a push build an export failure does not stop the job: signing still runs, and the scan reports the missing export as an error through the job summary and a warning annotation. On a `push: false` build an export failure fails the job.
+**Since:** 2026-11-26 (spec: nebari-dev/llm-serving-pack docs/superpowers/specs/2026-11-26-pack-cve-scanning-and-renovate-design.md (not committed))
+
+### Composite action `trivy-scan`
+**Owner:** nebari-dev/.github · **Consumers:** `.github/workflows/pack-build-image.yaml`; planned: `pack-scan-images.yaml`. Not meant to be called from other repos (verified: `git grep -n "actions/trivy-scan" -- .github`)
+**Inputs (all strings):** `image-ref` or `input` (exactly one: a registry reference, or an OCI layout directory from buildx `type=oci,tar=false`); `ignorefile` (default `.trivyignore.yaml`; linted with `lint_trivyignore.py` and used only if the file exists; empty means none); `fail-on-findings` (default `"true"`); `sarif-file` (default empty; when set, SARIF is also written there); `title` (job summary heading, defaults to the scan target); `findings-file` and `baseline` (reserved, not implemented: setting either gives `result=error`).
+**Outputs:** `result`: `clean`, `findings`, or `error` (bad inputs, ignore-file lint problems, or Trivy could not run).
+**Promises:** scans `linux/amd64` with Trivy v0.76.2 (release tarball sha256 checked) using `--scanners vuln --severity CRITICAL,HIGH --ignore-unfixed`. Trivy databases are cached per 6-hour UTC slot, and downloaded with up to three attempts on a miss. Writes a findings table (CVE, package, installed, fixed, severity) or the error to the job summary, and lists findings and lint problems in the log. Needs no permissions and uploads nothing.
+**Exit behavior:** `clean` always exits 0. Otherwise, with `fail-on-findings: "false"` it exits 0 and emits a `::warning::`; with any other value it emits an `::error::` and exits 1.
+**Since:** 2026-11-26 (spec: nebari-dev/llm-serving-pack docs/superpowers/specs/2026-11-26-pack-cve-scanning-and-renovate-design.md (not committed))
+
+### `lint_trivyignore.py` CLI and the `.trivyignore.yaml` subset it accepts
+**Owner:** nebari-dev/.github (the file format itself is Trivy's, experimental at v0.76.2) · **Consumers:** `trivy-scan`; planned: llm-serving-pack's gate job in `build-images.yaml`, which runs it directly; every adopting pack's `.trivyignore.yaml` (verified: `git grep -n "lint_trivyignore" -- .github`)
+**Usage:** `python lint_trivyignore.py FILE [--today YYYY-MM-DD]`. Needs `ruamel.yaml` (pinned to `0.19.1` by its callers).
+**Promises:** accepts only the top-level key `vulnerabilities`, a list of entries. Each entry needs a non-empty `id` and `statement`, an `expired_at` that is an unquoted YAML date or datetime (a quoted string is rejected because Trivy cannot parse it) no more than 45 days after today (a past date is accepted on purpose: Trivy drops expired entries, so the scan then fails on the CVE), and a scope: `purls` or `paths`, each a non-empty list of non-blank strings when present. Every purl carries a version (`@version`), and a `paths` entry made only of wildcards and slashes (`*`, `**`, `**/*`) is rejected because it would suppress the CVE everywhere.
+**Errors:** exit 0 clean; exit 1 with one line per problem on stdout, formatted `<entry id or index>: <problem>`; exit 2 for a usage error or an unreadable file or YAML.
+**Since:** 2026-11-26 (spec: nebari-dev/llm-serving-pack docs/superpowers/specs/2026-11-26-pack-cve-scanning-and-renovate-design.md (not committed))
+
+### Tag `v1` of `nebari-dev/.github`
+**Owner:** nebari-dev/.github · **Consumers:** floating `@v1` callers: software-pack-template (`build-images.yaml`, `release.yaml`), rayserve-pack (`release.yaml`), pack-testbed (`build-images.yaml`, `release.yaml`) (verified: `git ls-remote https://github.com/nebari-dev/.github refs/tags/v1 refs/tags/v2 && gh search code "pack-release.yaml@v1" --owner nebari-dev --json repository,path --jq ".[].repository.nameWithOwner" && gh search code "pack-build-image.yaml@v1" --owner nebari-dev --json repository,path --jq ".[].repository.nameWithOwner" && grep -n "uses:.*@v1" ../pack-testbed/.github/workflows/*.yaml`)
+**Promises:** frozen at `ddc8bd9f17cf1d6844bc2b5fb52825ed70f1a688` and never moved. At that commit `pack-build-image.yaml` asks only `contents: read` and `packages: write` and does not sign or scan, and `pack-release.yaml` asks only `contents: write` and does not sign. Callers that grant no `id-token` or `attestations` permission keep working. Signing and scanning reach callers only through a new tag they move to by their own edit.
+**Since:** 2026-11-26 (spec: nebari-dev/llm-serving-pack docs/superpowers/specs/2026-11-26-pack-cve-scanning-and-renovate-design.md (not committed))
+
+### GitHub Release `<chart-name>-<version>` with the packaged chart `.tgz` attached
+**Owner:** nebari-dev/.github `pack-release.yaml` · **Consumers:** none today in llm-serving-pack; planned: the released leg of `pack-scan-images.yaml` (verified: `git grep -n "gh release download" origin/main -- .github scripts dev` in llm-serving-pack prints nothing)
+**Promises:** created in the calling repository when no release with that tag exists yet; the tag is `<chart-name>-<version>`, with `version` read from `<chart-path>/Chart.yaml`. Titled with the tag, with generated notes, marked prerelease when the version contains `-`. Assets: exactly one packaged chart `<name>-<version>.tgz` (image tags at `tag-paths` pinned to `sha-<short sha>` of the release commit), its Sigstore bundle, and its SPDX SBOM `<tgz>.spdx.json`. Re-runs skip an existing release and change nothing.
+**Since:** 2026-11-26 (spec: nebari-dev/llm-serving-pack docs/superpowers/specs/2026-11-26-pack-cve-scanning-and-renovate-design.md (not committed))

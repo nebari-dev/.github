@@ -18,6 +18,7 @@ Below is a quick list of what you'll find in this repository:
 
 ## :arrows_counterclockwise: Reusable workflows
 
+- [`.github/workflows/pack-build-image.yaml`](.github/workflows/pack-build-image.yaml): Reusable workflow (`workflow_call`) that builds a software pack's image, pushes it to GHCR and Quay and signs it. Set `scan: true` to also scan the `linux/amd64` image for fixable CRITICAL and HIGH CVEs with Trivy: a pull request build (`push: false`) fails on findings, a push build reports them as a warning without failing. An optional `.trivyignore.yaml` at the caller's repo root is linted and applied. The interface is documented in [`docs/architecture/contracts.md`](docs/architecture/contracts.md).
 - [`.github/workflows/sync-project-priority.yaml`](.github/workflows/sync-project-priority.yaml): Reusable workflow (`workflow_call`) that adds an issue/PR to a Projects v2 board and syncs a `Priority` single-select field from `priority: <level>` labels. Caller repos invoke it on their issue and pull request events, passing the project's GraphQL node ID and a PAT with `project: write` scope:
 
   ```yaml

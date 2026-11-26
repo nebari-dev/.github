@@ -31,6 +31,11 @@ on:
         required: false
         type: boolean
         default: true
+      scan:
+        description: "Scan the built image (linux/amd64) for fixable CRITICAL/HIGH CVEs."
+        required: false
+        type: boolean
+        default: false
     secrets:
       QUAY_TOKEN:
         required: false
@@ -102,14 +107,41 @@ jobs:
           cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:cache
           cache-to: ${{ inputs.push && format('type=registry,ref={0}:cache,mode=max', env.GHCR_IMAGE) || '' }}
 
+      # Export a linux/amd64 build of the same context, Dockerfile and target
+      # as an OCI layout directory for the scan. Only amd64 is scanned,
+      # whatever `platforms` is. Layers come from the build above through the
+      # same builder and cache. provenance and sbom are off so the layout
+      # holds the image and no attestation manifest. Written to
+      # $RUNNER_TEMP, and before the _dot-github checkout, so neither lands
+      # inside a build context. On a push build an export failure must not
+      # stop the job before signing: the Scan step then finds no layout and
+      # reports an error as a warning.
+      - name: Export for scan (linux/amd64)
+        if: ${{ inputs.scan }}
+        continue-on-error: ${{ inputs.push }}
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile || format('{0}/Dockerfile', inputs.context) }}
+          target: ${{ inputs.target }}
+          platforms: linux/amd64
+          outputs: type=oci,tar=false,dest=${{ runner.temp }}/scan-oci
+          provenance: false
+          sbom: false
+          push: false
+          cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:cache
+
       # Reusable workflows resolve `uses: ./` against the CALLER's workspace,
-      # not this repo, so the composite sign actions must be loaded from a
-      # checkout of THIS repo. job.workflow_repository@job.workflow_sha pins
-      # exactly the nebari-dev/.github commit the caller invoked, keeping the
-      # action version coherent with the workflow version. (Same pattern as
-      # pack-release.yaml's _dot-github checkout.)
-      - name: Check out the reusable workflow's repo (for the sign action)
-        if: ${{ inputs.push }}
+      # not this repo, so the composite sign and trivy-scan actions must be
+      # loaded from a checkout of THIS repo. job.workflow_repository@
+      # job.workflow_sha pins exactly the nebari-dev/.github commit the caller
+      # invoked, keeping the action version coherent with the workflow
+      # version. (Same pattern as pack-release.yaml's _dot-github checkout.)
+      #
+      # Step order is part of this workflow's contract: signing runs before
+      # the scan, so a scan-tool failure cannot leave a pushed image unsigned.
+      - name: Check out the reusable workflow's repo (for the sign and scan actions)
+        if: ${{ inputs.push || inputs.scan }}
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ job.workflow_repository }}
@@ -129,3 +161,15 @@ jobs:
         with:
           image: ${{ env.QUAY_IMAGE }}
           digest: ${{ steps.build.outputs.digest }}
+
+      # On a pull request build (push: false) findings, ignore-file lint
+      # problems and Trivy execution failures fail the job. On a push build
+      # they become the job summary plus a warning, and the job result is
+      # unchanged.
+      - name: Scan
+        if: ${{ inputs.scan }}
+        uses: ./_dot-github/.github/actions/trivy-scan
+        with:
+          input: ${{ runner.temp }}/scan-oci
+          fail-on-findings: ${{ inputs.push && 'false' || 'true' }}
+          title: ${{ inputs.image }}
