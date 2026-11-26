@@ -141,7 +141,7 @@ def test_past_expiry_is_accepted():
     "value, clean",
     [
         pytest.param("2026-12-01", True, id="yaml-date"),
-        pytest.param('"2026-12-01"', True, id="string"),
+        pytest.param('"2026-12-01"', False, id="quoted-string"),
         pytest.param("2026-12-01T00:00:00Z", True, id="timestamp"),
         pytest.param('"next month"', False, id="garbage"),
     ],
@@ -154,6 +154,57 @@ def test_expired_at_forms(value, clean):
     else:
         assert len(problems) == 1
         assert "expired_at" in problems[0]
+
+
+@pytest.mark.parametrize(
+    "value, message",
+    [
+        pytest.param(
+            "2026-12-01",
+            "expired_at must be an unquoted YAML date (Trivy cannot parse a quoted string)",
+            id="str",
+        ),
+        pytest.param(
+            20261201, "expired_at must be a YAML date (YYYY-MM-DD)", id="int"
+        ),
+        pytest.param(
+            ["2026-12-01"], "expired_at must be a YAML date (YYYY-MM-DD)", id="list"
+        ),
+    ],
+)
+def test_expired_at_message_by_type(value, message):
+    assert lint(_doc(_entry(expired_at=value)), TODAY) == [
+        f"CVE-2026-1234: {message}"
+    ]
+
+
+@pytest.mark.parametrize(
+    "paths, clean",
+    [
+        pytest.param("x", False, id="string-not-list"),
+        pytest.param([], False, id="empty-list"),
+        pytest.param([""], False, id="blank-entry"),
+        pytest.param(["**"], False, id="double-star"),
+        pytest.param(["*"], False, id="star"),
+        pytest.param(["**/*"], False, id="double-star-slash-star"),
+        pytest.param(["*/**"], False, id="star-slash-double-star"),
+        pytest.param(["usr/local/bin/app"], True, id="specific-path"),
+    ],
+)
+def test_paths_must_be_scoped_list(paths, clean):
+    problems = lint(_doc(_entry(purls=_MISSING, paths=paths)), TODAY)
+    if clean:
+        assert problems == []
+    else:
+        assert len(problems) == 1, problems
+        assert "path" in problems[0]
+
+
+@pytest.mark.parametrize("purls", ["pkg:pypi/a@1", [], [""]])
+def test_purls_must_be_list_of_strings(purls):
+    problems = lint(_doc(_entry(purls=purls)), TODAY)
+    assert len(problems) == 1, problems
+    assert "purls" in problems[0]
 
 
 @pytest.mark.parametrize(

@@ -175,12 +175,27 @@ runs:
         fi
         venv="$RUNNER_TEMP/trivy-lint-venv"
         if [[ ! -x "$venv/bin/python" ]]; then
-          if ! python3 -m venv "$venv" \
-              || ! "$venv/bin/python" -m pip install --quiet --disable-pip-version-check "ruamel.yaml==0.19.1"; then
+          if ! python3 -m venv "$venv"; then
             rm -rf "$venv"
-            { echo "ok=false"; echo "error=could not install the ignore-file lint's dependencies"; } >> "$GITHUB_OUTPUT"
+            { echo "ok=false"; echo "error=could not create the ignore-file lint's venv"; } >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Up to three attempts, as for the DB download: an index hiccup must
+          # not turn a PR build red. pip also retries each connection itself.
+          waits=(10 30)
+          max_attempts=3
+          for (( attempt = 1; ; attempt++ )); do
+            if "$venv/bin/python" -m pip install --quiet --disable-pip-version-check "ruamel.yaml==0.19.1"; then
+              break
+            fi
+            if (( attempt >= max_attempts )); then
+              rm -rf "$venv"
+              { echo "ok=false"; echo "error=could not install the ignore-file lint's dependencies after $max_attempts attempts"; } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "pip install attempt $attempt of $max_attempts failed; retrying in ${waits[attempt-1]}s."
+            sleep "${waits[attempt-1]}"
+          done
         fi
         rc=0
         problems="$("$venv/bin/python" "$LINT_SCRIPT" "$IGNOREFILE" 2>&1)" || rc=$?
@@ -189,8 +204,9 @@ runs:
           { echo "ok=true"; echo "ignorefile=$IGNOREFILE"; } >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        # Problem text comes from the ignore file, so it is indented on output
-        # (never read as a workflow command) and written with a random delimiter.
+        # Problem text comes from the ignore file (PR-controlled), so it goes
+        # to the output under a random heredoc delimiter, and the Report step
+        # prints it only inside a ::stop-commands:: block.
         delim="EOF_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
         {
           echo "ok=false"
@@ -292,23 +308,40 @@ runs:
             error)
               echo "Scan error: ${err}"
               if [[ -n "$LINT_PROBLEMS" ]]; then
+                # The fence is longer than any backtick run in the
+                # (PR-controlled) text, so the text cannot close it.
+                longest="$(printf '%s\n' "$LINT_PROBLEMS" | awk '{ while (match($0, /`+/)) { if (RLENGTH > m) m = RLENGTH; $0 = substr($0, RSTART + RLENGTH) } } END { print m + 0 }')"
+                fence='```'
+                while (( ${#fence} <= longest )); do fence+='`'; done
                 echo
-                echo '```'
+                echo "$fence"
                 printf '%s\n' "$LINT_PROBLEMS"
-                echo '```'
+                echo "$fence"
               fi ;;
           esac
           echo
         } >> "$GITHUB_STEP_SUMMARY"
 
-        if [[ "$result" == "findings" ]]; then
-          echo "Findings (CVE, package, installed -> fixed, severity):"
-          jq -r '.Results[]?.Vulnerabilities[]?
-            | "  \(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion) \(.Severity)"' "$JSON"
-        fi
-        if [[ -n "$LINT_PROBLEMS" ]]; then
-          echo "Ignore-file lint problems:"
-          printf '%s\n' "$LINT_PROBLEMS" | sed 's/^/  /'
+        # Lint problems come from the PR-controlled ignore file and package
+        # names from the scanned image, so both are printed with workflow
+        # commands turned off. The final ::warning::/::error:: stays outside.
+        if [[ "$result" == "findings" || -n "$LINT_PROBLEMS" ]]; then
+          token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::${token}"
+          # Any exit inside the block still turns commands back on.
+          trap 'echo "::${token}::"' EXIT
+          if [[ "$result" == "findings" ]]; then
+            echo "Findings (CVE, package, installed -> fixed, severity):"
+            jq -r '.Results[]?.Vulnerabilities[]?
+              | "  \(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion) \(.Severity)"' "$JSON" \
+              || echo "  (could not list the findings; see the job summary)"
+          fi
+          if [[ -n "$LINT_PROBLEMS" ]]; then
+            echo "Ignore-file lint problems:"
+            printf '%s\n' "$LINT_PROBLEMS" | sed 's/^/  /'
+          fi
+          echo "::${token}::"
+          trap - EXIT
         fi
 
         case "$result" in
