@@ -21,8 +21,13 @@ name: pack-scan-images
 #     no digest (own-floating), has its findings reported and its job passes
 #     unless the scan errored: it was built from main, and the PR's
 #     build-time scan gates whatever the PR rebuilds.
-#   - third-party (everything else): scanned with no ignore file. For now
-#     its findings are reported only.
+#   - third-party (everything else): scanned with no ignore file. With
+#     findings, its job fails only when a newer release exists on the
+#     pinned tag's line, or the registry now serves a different digest for
+#     the pinned tag (check_image_freshness.py); the failure names what is
+#     newer. Otherwise its findings are reported only. A freshness check
+#     that cannot run (registry unreachable after 3 attempts, no version
+#     tag) fails the job.
 # A scan that errors (image not pullable, Trivy failed, bad ignore file)
 # fails its job whatever the origin and trigger.
 #
@@ -205,9 +210,10 @@ jobs:
           ref: ${{ job.workflow_sha }}
           path: _dot-github
 
-      # fail-on-findings is "false" for third-party images (until the
-      # freshness rule lands) and for the calling repo's own latest images
-      # on pull_request (row 66); "true" for everything else. The DBs come
+      # fail-on-findings is "false" for third-party images (the freshness
+      # check below decides whether their findings fail the job) and for
+      # the calling repo's own latest images on pull_request (row 66);
+      # "true" for everything else. The DBs come
       # from the cache the trivy-db job saved, under its key.
       - name: Scan
         id: scan
@@ -234,14 +240,111 @@ jobs:
           sarif_file: ${{ runner.temp }}/trivy.sarif
           category: trivy/source/${{ matrix.slug }}
 
-      # PLACEHOLDER (Task 16, row 41): the third-party freshness rule goes
-      # here. With findings, list the repository's tags and the pinned tag's
-      # current digest, run check_image_freshness.py, and fail the job when a
-      # newer release on the image's line or a newer digest exists. Until
-      # then, third-party findings are reported only.
-      - name: Third-party freshness check (not implemented yet)
+      # Row 41: a third-party image with findings fails only when something
+      # newer exists on its line, so the failure is actionable (bump the
+      # pin). Lists the repository's tags and, when the ref pins a digest,
+      # the digest the registry serves today for the pinned tag (index
+      # digest: sha256 of the raw manifest, as a pinned digest is), then
+      # runs check_image_freshness.py. Registry calls get 3 attempts (Docker
+      # Hub rate limits); if they still fail, or the script cannot judge
+      # the ref, the job fails closed. skopeo is preinstalled on
+      # ubuntu-latest; python3 is the image's own (3.12 on ubuntu-24.04).
+      - name: Third-party freshness check
         if: ${{ matrix.origin == 'third-party' && steps.scan.outputs.result == 'findings' }}
-        run: echo "Freshness rule not implemented yet; third-party findings are reported only."
+        env:
+          REF: ${{ matrix.ref }}
+        run: |
+          set -uo pipefail
+
+          # Escape as the toolkit's escapeData does, so text derived from
+          # REF or the registry renders verbatim in the annotation.
+          escape() {
+            local e="${1//'%'/%25}"
+            e="${e//$'\r'/%0D}"
+            printf '%s' "${e//$'\n'/%0A}"
+          }
+
+          cannot() {
+            echo "::error::$(escape "Cannot evaluate freshness rule: $1")"
+            echo "**Freshness rule:** cannot evaluate freshness rule: $1" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+          # Up to 3 attempts, 20s then 40s apart.
+          retry() {
+            local attempt
+            for attempt in 1 2 3; do
+              if "$@"; then return 0; fi
+              if (( attempt < 3 )); then sleep $(( attempt * 20 )); fi
+            done
+            return 1
+          }
+
+          # Repository and tag as collect_chart_images.py splits them: the
+          # digest is everything after "@", and only a ":" in the last path
+          # segment starts a tag (a colon earlier is a registry port).
+          name="${REF%%@*}"
+          last="${name##*/}"
+          if [[ "$last" == *:* ]]; then
+            repo="${name%:*}"
+            tag="${last##*:}"
+          else
+            repo="$name"
+            tag=""
+          fi
+
+          tags_json="$RUNNER_TEMP/freshness-tags.json"
+          tags_file="$RUNNER_TEMP/freshness-tags.txt"
+          list_tags() {
+            skopeo list-tags "docker://${repo}" > "$tags_json" \
+              && jq -r '.Tags[]' "$tags_json" > "$tags_file"
+          }
+          retry list_tags || cannot "could not list the tags of ${repo}"
+
+          check_args=("$REF" --tags-file "$tags_file")
+          if [[ "$REF" == *@* && -n "$tag" ]]; then
+            manifest="$RUNNER_TEMP/freshness-manifest.json"
+            # Hash the bytes exactly as served; a $(...) capture would drop
+            # trailing newlines and change the digest.
+            fetch_manifest() {
+              skopeo inspect --raw "docker://${repo}:${tag}" > "$manifest" && [[ -s "$manifest" ]]
+            }
+            retry fetch_manifest || cannot "could not read the digest of ${repo}:${tag}"
+            digest="$(sha256sum < "$manifest" | cut -d' ' -f1)" \
+              || cannot "could not hash the manifest of ${repo}:${tag}"
+            check_args+=(--tag-digest "sha256:${digest}")
+          fi
+
+          # The runner runs this with bash -e, so the status is captured in
+          # an || list; a bare assignment exiting 1 or 2 would end the step
+          # before the case below.
+          rc=0
+          msg="$(python3 _dot-github/.github/scripts/check_image_freshness.py "${check_args[@]}")" || rc=$?
+          case "$rc" in
+            0)
+              echo "No newer release on this line; findings reported only."
+              echo "**Freshness rule:** no newer release on this line; reported only." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            1)
+              # A crash also exits 1, but prints nothing on stdout.
+              [[ -n "$msg" ]] || cannot "check_image_freshness.py failed"
+              # The message is one line: the collector-validated ref plus a
+              # tag or digest from the registry. Escaped for the annotation;
+              # in the summary it goes in an indented code block, which a
+              # single line cannot break out of.
+              echo "::error::$(escape "$msg")"
+              {
+                echo "**Freshness rule:** something newer exists on this line; bump the pin."
+                echo
+                echo "    ${msg}"
+                echo
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+            *)
+              cannot "check_image_freshness.py exited ${rc} (no version tag in the ref?)"
+              ;;
+          esac
 
       # An errored scan always fails the job. With fail-on-findings "true"
       # the Scan step has already failed it; this catches the "false" cases
