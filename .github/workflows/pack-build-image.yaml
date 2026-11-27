@@ -36,6 +36,16 @@ on:
         required: false
         type: boolean
         default: false
+      scan-baseline-workflow:
+        description: >-
+          Workflow file name (e.g. 'scan-images.yaml') of the calling repo's
+          scheduled pack-scan-images run. When set, a scan on a push: false
+          build fails only on findings not in this image's baseline from that
+          workflow's latest scheduled run on main; a missing baseline makes
+          every finding block. Empty (the default): every finding blocks.
+        required: false
+        type: string
+        default: ""
     secrets:
       QUAY_TOKEN:
         required: false
@@ -162,14 +172,61 @@ jobs:
           image: ${{ env.QUAY_IMAGE }}
           digest: ${{ steps.build.outputs.digest }}
 
+      # With scan-baseline-workflow set on a pull request build, fetch this
+      # image's findings from the newest completed scheduled run of that
+      # workflow on main that still has them (artifact
+      # trivy-baseline-<slug>, written by pack-scan-images.yaml; the 10
+      # newest runs are searched). The job's own token reads them: that
+      # works in a public repo, and in a private one (no actions: read) the
+      # lookup fails. Any failure only leaves no file, and the Scan step,
+      # given a baseline path with no file behind it, blocks on every
+      # finding (fail closed).
+      - name: Fetch the scan baseline from main
+        if: ${{ inputs.scan && !inputs.push && inputs.scan-baseline-workflow != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ inputs.scan-baseline-workflow }}
+          SLUG_SCRIPT: _dot-github/.github/scripts/collect_chart_images.py
+        run: |
+          set -uo pipefail
+          dest="$RUNNER_TEMP/scan-baseline"
+          rm -rf "$dest"
+          no_baseline() {
+            echo "::warning::No scan baseline: $1. Every finding blocks."
+            exit 0
+          }
+          # The slug the scheduled scan's matrix gives this image: image
+          # references are lowercase, and GHCR_IMAGE is the repository with
+          # no tag. --slug needs only the standard library.
+          slug="$(python3 "$SLUG_SCRIPT" --slug "${GHCR_IMAGE,,}")" \
+            || no_baseline "could not compute the image's slug"
+          name="trivy-baseline-${slug}"
+          run_ids="$(gh run list -R "$GITHUB_REPOSITORY" -w "$WORKFLOW" -b main -e schedule \
+              --status completed -L 10 --json databaseId --jq '.[].databaseId')" \
+            || no_baseline "could not list the scheduled runs of ${WORKFLOW} on main"
+          for id in $run_ids; do
+            live="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/artifacts?name=${name}" \
+                --jq '[.artifacts[] | select(.expired | not)] | length')" || continue
+            if (( live > 0 )); then
+              gh run download "$id" -R "$GITHUB_REPOSITORY" -n "$name" -D "$dest" \
+                || { rm -rf "$dest"; no_baseline "could not download ${name} from run ${id}"; }
+              echo "Scan baseline: ${name} from run ${id}."
+              exit 0
+            fi
+          done
+          no_baseline "no ${name} artifact in the 10 newest completed scheduled runs of ${WORKFLOW} on main"
+
       # On a pull request build (push: false) findings, ignore-file lint
-      # problems and Trivy execution failures fail the job. On a push build
-      # they become the job summary plus a warning, and the job result is
-      # unchanged.
+      # problems and Trivy execution failures fail the job; with
+      # scan-baseline-workflow set, only findings the baseline lacks do. On
+      # a push build they become the job summary plus a warning, and the
+      # job result is unchanged.
       - name: Scan
         if: ${{ inputs.scan }}
         uses: ./_dot-github/.github/actions/trivy-scan
         with:
           input: ${{ runner.temp }}/scan-oci
           fail-on-findings: ${{ inputs.push && 'false' || 'true' }}
+          baseline: ${{ (!inputs.push && inputs.scan-baseline-workflow != '') && format('{0}/scan-baseline/trivy-findings.json', runner.temp) || '' }}
           title: ${{ inputs.image }}

@@ -4,7 +4,10 @@ Run with: python -m pytest .github/scripts/test_collect_chart_images.py -v
 """
 import json
 import re
+import subprocess
+import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 from ruamel.yaml import YAML
@@ -312,6 +315,49 @@ def test_slug_cli_matches_matrix_slug(ref, capsys):
     printed = capsys.readouterr().out.strip()
     [entry] = build_entries([ref], "source", OWN, [])
     assert printed == entry.slug
+
+
+# The build job's baseline fetch runs --slug with the runner's python3, which
+# has no ruamel.yaml. A None entry in sys.modules makes any import of ruamel
+# raise ImportError, as if it were not installed.
+_NO_RUAMEL = (
+    "import runpy, sys\n"
+    "sys.modules['ruamel'] = None\n"
+    "sys.modules['ruamel.yaml'] = None\n"
+    "sys.argv = sys.argv[1:]\n"
+    "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+)
+_SCRIPT = str(Path(__file__).with_name("collect_chart_images.py"))
+
+
+@pytest.mark.parametrize(
+    "ref, slug",
+    [
+        ("ghcr.io/nebari-dev/llm-serving-pack/operator", "ghcr-io-nebari-dev-llm-serving-pack-operator"),
+        ("ghcr.io/nebari-dev/llm-serving-pack/operator:latest", "ghcr-io-nebari-dev-llm-serving-pack-operator"),
+        ("redis:7.4.12@" + DIGEST, "redis"),
+    ],
+)
+def test_slug_cli_needs_no_ruamel(ref, slug):
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c", _NO_RUAMEL, _SCRIPT, "--slug", ref],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == slug + "\n"
+
+
+def test_rendered_mode_still_needs_ruamel(tmp_path):
+    rendered = tmp_path / "r.yaml"
+    rendered.write_text("kind: Pod\n")
+    proc = subprocess.run(
+        [sys.executable, "-I", "-c", _NO_RUAMEL, _SCRIPT, "--rendered", str(rendered), "--leg", "source"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    assert "ruamel" in proc.stderr
 
 
 def test_slug_stable_across_tags_and_digests():

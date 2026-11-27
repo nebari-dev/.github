@@ -6,12 +6,23 @@ name: pack-scan-images
 # (collect_chart_images.py), and scans each one with the trivy-scan action
 # in its own matrix job (fail-fast: false). Every job writes its findings to
 # the job summary and, except on pull requests from forks, uploads SARIF to
-# code scanning under category trivy/source/<slug>, where <slug> is the
+# code scanning under category trivy/<leg>/<slug>, where <slug> is the
 # image repository without its tag, so alerts carry over a version bump.
 #
-# This file implements the source leg only: the chart at the checked-out
-# ref, rendered with values-files plus source-values-files. chart-name is
-# accepted for the released leg, which is not implemented yet.
+# Two legs. The source leg (jobs collect, scan) is the chart at the
+# checked-out ref, rendered with values-files plus source-values-files; it
+# decides whether the run is green. The released leg (jobs
+# collect-released, scan-released) runs on schedule only, when chart-name
+# is set: it renders the newest non-draft, non-prerelease GitHub Release
+# tagged <chart-name>-<version> with values-files only, and scans its
+# images the same way under category trivy/released/<slug>. Both of its
+# jobs are continue-on-error, so it reports and never fails the run.
+#
+# After each leg's collect, every trivy/<leg>/* category that has a Trivy
+# analysis on this ref with results and is not in the leg's matrix gets an
+# empty SARIF run, so the alerts of an image the chart stopped deploying
+# close. That cleanup never blocks the scan: a failed lookup or upload is
+# a warning.
 #
 # Whose image it is decides what fails a job:
 #   - first-party (repository under ghcr.io/<owner>/<repo>/ of the calling
@@ -31,7 +42,12 @@ name: pack-scan-images
 # A scan that errors (image not pullable, Trivy failed, bad ignore file)
 # fails its job whatever the origin and trigger.
 #
-# Callers grant contents: read and security-events: write.
+# On a schedule run on main, each of the calling repo's own images also
+# uploads its findings as artifact trivy-baseline-<slug> (14 days), the
+# baseline pack-build-image.yaml's pull request scan compares against.
+#
+# Callers grant contents: read and security-events: write (both collect
+# jobs use the latter to close stale categories, the scan jobs to upload).
 
 on:
   workflow_call:
@@ -55,7 +71,10 @@ on:
         type: string
         default: ""
       chart-name:
-        description: "Release tag prefix (<chart-name>-<version>). Empty turns the released leg off. Not used yet."
+        description: >-
+          Release tag prefix (<chart-name>-<version>). On schedule runs the
+          newest such non-draft, non-prerelease release's chart .tgz is
+          scanned, report-only. Empty turns the released leg off.
         required: false
         type: string
         default: ""
@@ -116,6 +135,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      security-events: write
     outputs:
       matrix: ${{ steps.collect.outputs.matrix }}
     steps:
@@ -186,6 +206,118 @@ jobs:
             echo
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Row 87: closes the alerts of images this leg no longer deploys.
+      # Lists the Trivy analyses on this ref (newest first) and, for each
+      # trivy/<leg>/<slug> category not in this run's matrix whose newest
+      # analysis still has results, writes an empty run (tool Trivy, no
+      # results) with that category as its automationDetails.id; the upload
+      # step below sends them in one SARIF file. A category whose newest
+      # analysis is already empty has no open alerts, so it is not sent
+      # again. Categories come from the API: only ones matching
+      # trivy/<leg>/[A-Za-z0-9-]+ (the shape a slug has) are used or
+      # printed. Never blocks the scan: a failed lookup is a warning, and
+      # the step and the upload are continue-on-error. The API answers
+      # HTTP 404 "no analysis found" when the repo has no Trivy analysis at
+      # all (an unknown ref gives []); both mean nothing to close.
+      # Skipped on pull requests from forks (read-only token).
+      - name: Find stale categories
+        id: stale
+        if: >-
+          ${{ steps.collect.outputs.matrix != ''
+          && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          LEG: source
+          MATRIX: ${{ steps.collect.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          prefix="trivy/${LEG}/"
+          listing="$RUNNER_TEMP/analyses-${LEG}.json"
+
+          rc=0
+          ref_q="$(jq -rn --arg r "$REF" '$r | @uri')" || rc=$?
+          if (( rc == 0 )); then
+            gh api --paginate \
+              "repos/${REPOSITORY}/code-scanning/analyses?ref=${ref_q}&tool_name=Trivy&per_page=100" \
+              > "$listing" || rc=$?
+          fi
+          if (( rc != 0 )); then
+            # On an HTTP error gh writes the error body to stdout.
+            if jq -e -s 'length == 1 and (.[0] | type) == "object" and .[0].message == "no analysis found"' \
+                "$listing" > /dev/null 2>&1; then
+              echo "No Trivy analyses in this repository yet; nothing to close."
+              exit 0
+            fi
+            echo "::warning::Could not list code scanning analyses (exit ${rc}); stale ${prefix}* categories were not closed."
+            exit 0
+          fi
+
+          # gh --paginate prints one JSON array per page; -s gathers them.
+          rc=0
+          jq -r -s --arg p "$prefix" --argjson matrix "$MATRIX" '
+            ([$matrix.include[] | $p + .slug]) as $current
+            | [.[][] | select(type == "object" and (.category | type) == "string")
+               | {c: (.category | sub("/$"; "")), n: (.results_count // 0), t: .created_at}]
+            | map(select(.c | startswith($p)))
+            | group_by(.c) | map(max_by(.t))
+            | map(select(.n > 0) | .c)
+            | map(select(test("^trivy/(source|released)/[A-Za-z0-9-]+$")))
+            | map(select(. as $c | $current | any(. == $c) | not))
+            | sort | .[]' "$listing" > "$RUNNER_TEMP/stale-${LEG}.txt" || rc=$?
+          if (( rc != 0 )); then
+            echo "::warning::Could not read the code scanning analyses (jq exit ${rc}); stale ${prefix}* categories were not closed."
+            exit 0
+          fi
+
+          mapfile -t stale < "$RUNNER_TEMP/stale-${LEG}.txt"
+          if (( ${#stale[@]} == 0 )); then
+            echo "No stale ${prefix}* categories."
+            exit 0
+          fi
+
+          # Code scanning rejects a SARIF file with more than 20 runs
+          # (docs: "Runs per file | 20", data/reusables/code-scanning/
+          # sarif-limits.md). Send the first 20 in sorted order; once
+          # closed they drop out through the results filter above, so the
+          # rest go in later runs.
+          if (( ${#stale[@]} > 20 )); then
+            echo "::warning::$(( ${#stale[@]} - 20 )) more stale ${prefix}* categories are left for later runs (at most 20 per SARIF upload)."
+            stale=("${stale[@]:0:20}")
+          fi
+
+          # automationDetails.id is "<category>/": the category is
+          # everything before the last "/", as the category input does.
+          sarif="$RUNNER_TEMP/stale-${LEG}.sarif"
+          jq -n '{
+              version: "2.1.0",
+              runs: [$ARGS.positional[] | {
+                tool: {driver: {name: "Trivy"}},
+                automationDetails: {id: (. + "/")},
+                results: []
+              }]
+            }' --args "${stale[@]}" > "$sarif" || {
+            echo "::warning::Could not write the empty SARIF; stale ${prefix}* categories were not closed."
+            exit 0
+          }
+          echo "sarif=$sarif" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Stale categories closed (${LEG})"
+            echo
+            printf -- "- \`%s\`\n" "${stale[@]}"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf 'Closing stale category %s\n' "${stale[@]}"
+
+      - name: Close stale categories
+        if: ${{ steps.stale.outputs.sarif != '' }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: ${{ steps.stale.outputs.sarif }}
+
   scan:
     name: Scan ${{ matrix.ref }}
     needs: [trivy-db, collect]
@@ -196,6 +328,487 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.collect.outputs.matrix) }}
+    steps:
+      # First-party images use the caller's ignore file. Third-party images
+      # get no exceptions, so they need no caller checkout.
+      - name: Checkout
+        if: ${{ matrix.origin == 'first-party' }}
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Check out the reusable workflow's repo (for the trivy-scan action)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: _dot-github
+
+      # The scheduled scan of main publishes each of the calling repo's own
+      # images' findings as artifact trivy-baseline-<slug>, the baseline a
+      # pull request's build-time scan (pack-build-image.yaml with
+      # scan-baseline-workflow set) compares against. Only images under the
+      # calling repo's own prefix have such a build, so only they publish.
+      - name: Decide whether to publish a baseline
+        id: baseline
+        if: >-
+          ${{ github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+          && matrix.leg == 'source' && matrix.origin == 'first-party' }}
+        env:
+          REF: ${{ matrix.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          own_prefix="ghcr.io/${REPOSITORY,,}/"
+          if [[ "${REF,,}" == "$own_prefix"* ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # fail-on-findings is "false" for third-party images (the freshness
+      # check below decides whether their findings fail the job) and for
+      # the calling repo's own latest images on pull_request (row 66);
+      # "true" for everything else. The DBs come
+      # from the cache the trivy-db job saved, under its key.
+      - name: Scan
+        id: scan
+        uses: ./_dot-github/.github/actions/trivy-scan
+        with:
+          image-ref: ${{ matrix.ref }}
+          ignorefile: ${{ matrix.origin == 'first-party' && inputs.ignorefile || '' }}
+          fail-on-findings: ${{ (matrix.origin != 'first-party' || (github.event_name == 'pull_request' && matrix.own-floating)) && 'false' || 'true' }}
+          sarif-file: ${{ runner.temp }}/trivy.sarif
+          findings-file: ${{ steps.baseline.outputs.publish == 'true' && format('{0}/trivy-findings.json', runner.temp) || '' }}
+          title: ${{ matrix.ref }} (${{ matrix.origin }})
+          cache-key: ${{ needs.trivy-db.outputs.cache-key }}
+
+      # Runs after a failed Scan step too, so a first-party image with
+      # findings still reaches the Security tab. Skipped on pull requests
+      # from forks, which get a read-only token, and when the scan errored
+      # (no SARIF was written).
+      - name: Upload SARIF
+        if: >-
+          ${{ !cancelled()
+          && (steps.scan.outputs.result == 'clean' || steps.scan.outputs.result == 'findings')
+          && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: ${{ runner.temp }}/trivy.sarif
+          category: trivy/source/${{ matrix.slug }}
+
+      # Runs after a failed Scan step too: main's findings are the baseline
+      # whether or not they failed this job. Kept 14 days, so a baseline
+      # outlives a few missed scheduled runs. A scan that errored wrote no
+      # file, so nothing is uploaded, and a pull request then uses an older
+      # run's artifact or, with none, fails closed.
+      - name: Upload baseline findings
+        if: ${{ always() && steps.scan.outcome != 'skipped' && steps.baseline.outputs.publish == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trivy-baseline-${{ matrix.slug }}
+          path: ${{ runner.temp }}/trivy-findings.json
+          retention-days: 14
+          # A re-run of this job replaces the attempt's earlier upload.
+          overwrite: true
+
+      # Row 41: a third-party image with findings fails only when something
+      # newer exists on its line, so the failure is actionable (bump the
+      # pin). Lists the repository's tags and, when the ref pins a digest,
+      # the digest the registry serves today for the pinned tag (index
+      # digest: sha256 of the raw manifest, as a pinned digest is), then
+      # runs check_image_freshness.py. Registry calls get 3 attempts (Docker
+      # Hub rate limits); if they still fail, or the script cannot judge
+      # the ref, the job fails closed. skopeo is preinstalled on
+      # ubuntu-latest; python3 is the image's own (3.12 on ubuntu-24.04).
+      - name: Third-party freshness check
+        if: ${{ matrix.origin == 'third-party' && steps.scan.outputs.result == 'findings' }}
+        env:
+          REF: ${{ matrix.ref }}
+        run: |
+          set -uo pipefail
+
+          # Escape as the toolkit's escapeData does, so text derived from
+          # REF or the registry renders verbatim in the annotation.
+          escape() {
+            local e="${1//'%'/%25}"
+            e="${e//$'\r'/%0D}"
+            printf '%s' "${e//$'\n'/%0A}"
+          }
+
+          cannot() {
+            echo "::error::$(escape "Cannot evaluate freshness rule: $1")"
+            echo "**Freshness rule:** cannot evaluate freshness rule: $1" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+          # Up to 3 attempts, 20s then 40s apart.
+          retry() {
+            local attempt
+            for attempt in 1 2 3; do
+              if "$@"; then return 0; fi
+              if (( attempt < 3 )); then sleep $(( attempt * 20 )); fi
+            done
+            return 1
+          }
+
+          # Repository and tag as collect_chart_images.py splits them: the
+          # digest is everything after "@", and only a ":" in the last path
+          # segment starts a tag (a colon earlier is a registry port).
+          name="${REF%%@*}"
+          last="${name##*/}"
+          if [[ "$last" == *:* ]]; then
+            repo="${name%:*}"
+            tag="${last##*:}"
+          else
+            repo="$name"
+            tag=""
+          fi
+
+          tags_json="$RUNNER_TEMP/freshness-tags.json"
+          tags_file="$RUNNER_TEMP/freshness-tags.txt"
+          list_tags() {
+            skopeo list-tags "docker://${repo}" > "$tags_json" \
+              && jq -r '.Tags[]' "$tags_json" > "$tags_file"
+          }
+          retry list_tags || cannot "could not list the tags of ${repo}"
+
+          check_args=("$REF" --tags-file "$tags_file")
+          if [[ "$REF" == *@* && -n "$tag" ]]; then
+            manifest="$RUNNER_TEMP/freshness-manifest.json"
+            # Hash the bytes exactly as served; a $(...) capture would drop
+            # trailing newlines and change the digest.
+            fetch_manifest() {
+              skopeo inspect --raw "docker://${repo}:${tag}" > "$manifest" && [[ -s "$manifest" ]]
+            }
+            retry fetch_manifest || cannot "could not read the digest of ${repo}:${tag}"
+            digest="$(sha256sum < "$manifest" | cut -d' ' -f1)" \
+              || cannot "could not hash the manifest of ${repo}:${tag}"
+            check_args+=(--tag-digest "sha256:${digest}")
+          fi
+
+          # The runner runs this with bash -e, so the status is captured in
+          # an || list; a bare assignment exiting 1 or 2 would end the step
+          # before the case below.
+          rc=0
+          msg="$(python3 _dot-github/.github/scripts/check_image_freshness.py "${check_args[@]}")" || rc=$?
+          case "$rc" in
+            0)
+              echo "No newer release on this line; findings reported only."
+              echo "**Freshness rule:** no newer release on this line; reported only." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            1)
+              # A crash also exits 1, but prints nothing on stdout.
+              [[ -n "$msg" ]] || cannot "check_image_freshness.py failed"
+              # The message is one line: the collector-validated ref plus a
+              # tag or digest from the registry. Escaped for the annotation;
+              # in the summary it goes in an indented code block, which a
+              # single line cannot break out of.
+              echo "::error::$(escape "$msg")"
+              {
+                echo "**Freshness rule:** something newer exists on this line; bump the pin."
+                echo
+                echo "    ${msg}"
+                echo
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+            *)
+              cannot "check_image_freshness.py exited ${rc} (no version tag in the ref?)"
+              ;;
+          esac
+
+      # An errored scan always fails the job. With fail-on-findings "true"
+      # the Scan step has already failed it; this catches the "false" cases
+      # (third-party images, and own latest images on pull_request), where
+      # trivy-scan turns an error into a warning and exits 0.
+      - name: Fail on a scan error
+        if: ${{ steps.scan.outputs.result == 'error' }}
+        run: |
+          echo "::error::The scan of this image did not complete; see the job summary."
+          exit 1
+
+  # Released leg (rows 46, 58, 59): the chart users get from the newest
+  # GitHub Release. Schedule only, and only when chart-name is set. This job
+  # and scan-released are continue-on-error, so nothing here fails the run:
+  # a failure shows as a red job, a summary line and an annotation.
+  collect-released:
+    name: Collect images (released)
+    if: ${{ github.event_name == 'schedule' && inputs.chart-name != '' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    outputs:
+      matrix: ${{ steps.collect.outputs.matrix }}
+    steps:
+      # The caller's checkout supplies values-files (main's, row 46).
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Check out the reusable workflow's repo (for its scripts)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: _dot-github
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.18.2
+
+      # Newest by creation time among non-draft, non-prerelease releases
+      # whose tag is <chart-name>-<version> (pack-release.yaml marks a
+      # version containing "-" as a prerelease; those are not what users
+      # are told to install). The version part must start with a digit or
+      # "v<digit>", so chart "foo" does not pick up chart "foo-bar"'s
+      # releases, and the tag must be plain [A-Za-z0-9._+-] text because it
+      # is printed. No such release yet is a warning and an empty matrix.
+      - name: Download the latest released chart
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CHART_NAME: ${{ inputs.chart-name }}
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "::error::Released leg: $1"
+            echo "**Released leg:** $1" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+          rc=0
+          releases="$(gh release list -R "$REPOSITORY" --limit 200 \
+            --json tagName,createdAt,isDraft,isPrerelease)" || rc=$?
+          (( rc == 0 )) || fail "could not list the repository's releases (gh exit ${rc})."
+
+          rc=0
+          tag="$(jq -r --arg p "${CHART_NAME}-" '
+            [.[] | select((.isDraft | not) and (.isPrerelease | not)
+                          and (.tagName | startswith($p))
+                          and (.tagName[($p | length):] | test("^v?[0-9]")))]
+            | sort_by(.createdAt) | last | .tagName // empty' <<< "$releases")" || rc=$?
+          (( rc == 0 )) || fail "could not read the release list (jq exit ${rc})."
+
+          if [[ -z "$tag" ]]; then
+            echo "::warning::Released leg: no non-draft, non-prerelease release tagged <chart-name>-<version>; nothing to scan."
+            echo "**Released leg:** no non-draft, non-prerelease release tagged \`<chart-name>-<version>\`; nothing scanned." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [[ "$tag" =~ ^[A-Za-z0-9._+-]+$ ]] || fail "the newest release tag has unexpected characters; not scanned."
+
+          dir="$RUNNER_TEMP/released-chart"
+          mkdir -p "$dir"
+          rc=0
+          gh release download "$tag" -R "$REPOSITORY" -p '*.tgz' -D "$dir" || rc=$?
+          (( rc == 0 )) || fail "could not download the chart of release ${tag} (gh exit ${rc})."
+
+          charts=("$dir"/*.tgz)
+          [[ ${#charts[@]} -eq 1 && -f "${charts[0]}" ]] \
+            || fail "release ${tag} does not have exactly one .tgz asset."
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "chart=${charts[0]}" >> "$GITHUB_OUTPUT"
+
+      # values-files only, no source-values-files (row 59): those pin main's
+      # tags and would hide the released ones. The packaged chart carries
+      # its dependencies, so no helm dependency update. A failed render
+      # (including a missing values file) or a failed collect fails this
+      # job only, with a summary line (row 46).
+      - name: Render released chart and collect images
+        id: collect
+        if: ${{ steps.release.outputs.chart != '' }}
+        env:
+          CHART: ${{ steps.release.outputs.chart }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VALUES_FILES: ${{ inputs.values-files }}
+          IMAGE_ENV_REGEX: ${{ inputs.image-env-regex }}
+          EXTRA_IMAGES: ${{ inputs.extra-images }}
+          FIRST_PARTY_PREFIXES: ${{ inputs.first-party-prefixes }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "::error::Released leg: $1"
+            echo "**Released leg:** $1" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+
+          rc=0
+          python3 -m pip install "ruamel.yaml==0.19.1" || rc=$?
+          (( rc == 0 )) || fail "could not install ruamel.yaml (pip exit ${rc})."
+
+          # One entry per non-empty line, surrounding whitespace trimmed.
+          lines() { printf '%s\n' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d'; }
+
+          helm_args=()
+          while IFS= read -r f; do helm_args+=(-f "$f"); done < <(lines "$VALUES_FILES")
+          rendered="$RUNNER_TEMP/rendered-released.yaml"
+          rc=0
+          helm template "$CHART" "${helm_args[@]}" > "$rendered" || rc=$?
+          (( rc == 0 )) || fail "rendering the chart of release ${TAG} with values-files failed (helm exit ${rc}); its images were not scanned."
+
+          collect_args=(--rendered "$rendered" --leg released
+            --env-regex "$IMAGE_ENV_REGEX"
+            --own-prefix "ghcr.io/${REPOSITORY,,}/")
+          while IFS= read -r p; do collect_args+=(--first-party-prefix "$p"); done < <(lines "$FIRST_PARTY_PREFIXES")
+          while IFS= read -r i; do collect_args+=(--extra-image "$i"); done < <(lines "$EXTRA_IMAGES")
+          rc=0
+          matrix="$(python3 _dot-github/.github/scripts/collect_chart_images.py "${collect_args[@]}")" || rc=$?
+          (( rc == 0 )) || fail "collecting images from the chart of release ${TAG} failed (exit ${rc}); its images were not scanned."
+
+          # json.dumps prints one line, so the output needs no delimiter.
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Images collected (released: ${TAG})"
+            echo
+            echo "| Image | Origin | Own latest |"
+            echo "| --- | --- | --- |"
+            jq -r '.include[] | [.ref, .origin, (."own-floating" | tostring)]
+              | map(gsub("\\|"; "\\|")) | "| " + join(" | ") + " |"' <<< "$matrix"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Row 87: closes the alerts of images this leg no longer deploys.
+      # Lists the Trivy analyses on this ref (newest first) and, for each
+      # trivy/<leg>/<slug> category not in this run's matrix whose newest
+      # analysis still has results, writes an empty run (tool Trivy, no
+      # results) with that category as its automationDetails.id; the upload
+      # step below sends them in one SARIF file. A category whose newest
+      # analysis is already empty has no open alerts, so it is not sent
+      # again. Categories come from the API: only ones matching
+      # trivy/<leg>/[A-Za-z0-9-]+ (the shape a slug has) are used or
+      # printed. Never blocks the scan: a failed lookup is a warning, and
+      # the step and the upload are continue-on-error. The API answers
+      # HTTP 404 "no analysis found" when the repo has no Trivy analysis at
+      # all (an unknown ref gives []); both mean nothing to close.
+      # Skipped on pull requests from forks (read-only token).
+      - name: Find stale categories
+        id: stale
+        if: >-
+          ${{ steps.collect.outputs.matrix != ''
+          && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          LEG: released
+          MATRIX: ${{ steps.collect.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          prefix="trivy/${LEG}/"
+          listing="$RUNNER_TEMP/analyses-${LEG}.json"
+
+          rc=0
+          ref_q="$(jq -rn --arg r "$REF" '$r | @uri')" || rc=$?
+          if (( rc == 0 )); then
+            gh api --paginate \
+              "repos/${REPOSITORY}/code-scanning/analyses?ref=${ref_q}&tool_name=Trivy&per_page=100" \
+              > "$listing" || rc=$?
+          fi
+          if (( rc != 0 )); then
+            # On an HTTP error gh writes the error body to stdout.
+            if jq -e -s 'length == 1 and (.[0] | type) == "object" and .[0].message == "no analysis found"' \
+                "$listing" > /dev/null 2>&1; then
+              echo "No Trivy analyses in this repository yet; nothing to close."
+              exit 0
+            fi
+            echo "::warning::Could not list code scanning analyses (exit ${rc}); stale ${prefix}* categories were not closed."
+            exit 0
+          fi
+
+          # gh --paginate prints one JSON array per page; -s gathers them.
+          rc=0
+          jq -r -s --arg p "$prefix" --argjson matrix "$MATRIX" '
+            ([$matrix.include[] | $p + .slug]) as $current
+            | [.[][] | select(type == "object" and (.category | type) == "string")
+               | {c: (.category | sub("/$"; "")), n: (.results_count // 0), t: .created_at}]
+            | map(select(.c | startswith($p)))
+            | group_by(.c) | map(max_by(.t))
+            | map(select(.n > 0) | .c)
+            | map(select(test("^trivy/(source|released)/[A-Za-z0-9-]+$")))
+            | map(select(. as $c | $current | any(. == $c) | not))
+            | sort | .[]' "$listing" > "$RUNNER_TEMP/stale-${LEG}.txt" || rc=$?
+          if (( rc != 0 )); then
+            echo "::warning::Could not read the code scanning analyses (jq exit ${rc}); stale ${prefix}* categories were not closed."
+            exit 0
+          fi
+
+          mapfile -t stale < "$RUNNER_TEMP/stale-${LEG}.txt"
+          if (( ${#stale[@]} == 0 )); then
+            echo "No stale ${prefix}* categories."
+            exit 0
+          fi
+
+          # Code scanning rejects a SARIF file with more than 20 runs
+          # (docs: "Runs per file | 20", data/reusables/code-scanning/
+          # sarif-limits.md). Send the first 20 in sorted order; once
+          # closed they drop out through the results filter above, so the
+          # rest go in later runs.
+          if (( ${#stale[@]} > 20 )); then
+            echo "::warning::$(( ${#stale[@]} - 20 )) more stale ${prefix}* categories are left for later runs (at most 20 per SARIF upload)."
+            stale=("${stale[@]:0:20}")
+          fi
+
+          # automationDetails.id is "<category>/": the category is
+          # everything before the last "/", as the category input does.
+          sarif="$RUNNER_TEMP/stale-${LEG}.sarif"
+          jq -n '{
+              version: "2.1.0",
+              runs: [$ARGS.positional[] | {
+                tool: {driver: {name: "Trivy"}},
+                automationDetails: {id: (. + "/")},
+                results: []
+              }]
+            }' --args "${stale[@]}" > "$sarif" || {
+            echo "::warning::Could not write the empty SARIF; stale ${prefix}* categories were not closed."
+            exit 0
+          }
+          echo "sarif=$sarif" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Stale categories closed (${LEG})"
+            echo
+            printf -- "- \`%s\`\n" "${stale[@]}"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf 'Closing stale category %s\n' "${stale[@]}"
+
+      - name: Close stale categories
+        if: ${{ steps.stale.outputs.sarif != '' }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: ${{ steps.stale.outputs.sarif }}
+
+  # Same steps as scan, kept identical by hand (actionlint 1.7.7 rejects
+  # YAML aliases in steps), except: no baseline publish, and the category
+  # is trivy/released/<slug>. continue-on-error, so a failing image shows
+  # red here without failing the run (row 58); the freshness rule still
+  # runs and names what is newer. Runs only when collect-released produced
+  # a matrix: a skipped or failed collect-released leaves it empty. The
+  # guard reads the output, not needs.collect-released.result, because
+  # the docs do not say what result a failed continue-on-error job reports.
+  scan-released:
+    name: Scan released ${{ matrix.ref }}
+    needs: [trivy-db, collect-released]
+    if: >-
+      ${{ needs.collect-released.outputs.matrix != ''
+      && fromJSON(needs.collect-released.outputs.matrix).include[0] != null }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.collect-released.outputs.matrix) }}
     steps:
       # First-party images use the caller's ignore file. Third-party images
       # get no exceptions, so they need no caller checkout.
@@ -238,7 +851,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         with:
           sarif_file: ${{ runner.temp }}/trivy.sarif
-          category: trivy/source/${{ matrix.slug }}
+          category: trivy/released/${{ matrix.slug }}
 
       # Row 41: a third-party image with findings fails only when something
       # newer exists on its line, so the failure is actionable (bump the
