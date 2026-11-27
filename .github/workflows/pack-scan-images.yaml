@@ -1,0 +1,254 @@
+name: pack-scan-images
+
+# Reusable chart image scan for Nebari software packs.
+#
+# Renders the caller's Helm chart, collects every image the render deploys
+# (collect_chart_images.py), and scans each one with the trivy-scan action
+# in its own matrix job (fail-fast: false). Every job writes its findings to
+# the job summary and, except on pull requests from forks, uploads SARIF to
+# code scanning under category trivy/source/<slug>, where <slug> is the
+# image repository without its tag, so alerts carry over a version bump.
+#
+# This file implements the source leg only: the chart at the checked-out
+# ref, rendered with values-files plus source-values-files. chart-name is
+# accepted for the released leg, which is not implemented yet.
+#
+# Whose image it is decides what fails a job:
+#   - first-party (repository under ghcr.io/<owner>/<repo>/ of the calling
+#     repo, or under a first-party-prefixes entry): scanned with the
+#     caller's ignorefile; any finding fails the job. On pull_request only,
+#     the calling repo's own image referenced by tag latest or no tag, with
+#     no digest (own-floating), has its findings reported and its job passes
+#     unless the scan errored: it was built from main, and the PR's
+#     build-time scan gates whatever the PR rebuilds.
+#   - third-party (everything else): scanned with no ignore file. For now
+#     its findings are reported only.
+# A scan that errors (image not pullable, Trivy failed, bad ignore file)
+# fails its job whatever the origin and trigger.
+#
+# Callers grant contents: read and security-events: write.
+
+on:
+  workflow_call:
+    inputs:
+      chart-path:
+        description: "Directory in the calling repository containing Chart.yaml."
+        required: true
+        type: string
+      values-files:
+        description: >-
+          Newline-separated values files, relative to the repo root, used by
+          both legs. The base file must turn on every image-bearing component
+          and set no image tag.
+        required: true
+        type: string
+      source-values-files:
+        description: >-
+          Newline-separated extra values files for the source leg only, for
+          example tag overrides for main.
+        required: false
+        type: string
+        default: ""
+      chart-name:
+        description: "Release tag prefix (<chart-name>-<version>). Empty turns the released leg off. Not used yet."
+        required: false
+        type: string
+        default: ""
+      image-env-regex:
+        description: "Env vars whose name matches this regex have their value collected as an image."
+        required: false
+        type: string
+        default: "_IMAGE$"
+      extra-images:
+        description: "Newline-separated image references to scan in addition to the rendered ones."
+        required: false
+        type: string
+        default: ""
+      first-party-prefixes:
+        description: "Newline-separated repository prefixes treated as ours, in addition to ghcr.io/<owner>/<repo>/."
+        required: false
+        type: string
+        default: ""
+      ignorefile:
+        description: "Trivy YAML ignore file in the calling repo, applied to first-party images only."
+        required: false
+        type: string
+        default: ".trivyignore.yaml"
+
+jobs:
+  # Downloads the Trivy DBs once per run into the actions cache (rows 63,
+  # 74). The key changes every 6-hour UTC slot; this job's key is passed to
+  # every scan job, so a run that crosses a slot boundary still restores
+  # this copy instead of each job downloading. Uses trivy-scan's warm-only
+  # mode so the install, key and download steps exist in one place.
+  trivy-db:
+    name: Trivy DB
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      cache-key: ${{ steps.warm.outputs.cache-key }}
+    steps:
+      # Reusable workflows resolve `uses: ./` against the CALLER's workspace,
+      # so this repo's composite actions and scripts come from a checkout of
+      # job.workflow_repository@job.workflow_sha (same pattern as
+      # pack-release.yaml and pack-build-image.yaml).
+      - name: Check out the reusable workflow's repo (for the trivy-scan action)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: _dot-github
+
+      - name: Download Trivy DBs
+        id: warm
+        uses: ./_dot-github/.github/actions/trivy-scan
+        with:
+          warm-only: "true"
+
+  collect:
+    name: Collect images (source)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.collect.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Check out the reusable workflow's repo (for its scripts)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: _dot-github
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.18.2
+
+      # A failed render, a missing values file, an empty image list or two
+      # images sharing a slug fails this job, and with it the run.
+      - name: Render chart and collect images
+        id: collect
+        env:
+          CHART_PATH: ${{ inputs.chart-path }}
+          VALUES_FILES: ${{ inputs.values-files }}
+          SOURCE_VALUES_FILES: ${{ inputs.source-values-files }}
+          IMAGE_ENV_REGEX: ${{ inputs.image-env-regex }}
+          EXTRA_IMAGES: ${{ inputs.extra-images }}
+          FIRST_PARTY_PREFIXES: ${{ inputs.first-party-prefixes }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install "ruamel.yaml==0.19.1"
+
+          # One entry per non-empty line, surrounding whitespace trimmed.
+          lines() { printf '%s\n' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d'; }
+
+          # As pack-release.yaml: works with or without a Chart.lock.
+          helm dependency update "${CHART_PATH}"
+
+          helm_args=()
+          while IFS= read -r f; do helm_args+=(-f "$f"); done < <(lines "$VALUES_FILES")
+          while IFS= read -r f; do helm_args+=(-f "$f"); done < <(lines "$SOURCE_VALUES_FILES")
+          rendered="$RUNNER_TEMP/rendered-source.yaml"
+          helm template "${CHART_PATH}" "${helm_args[@]}" > "$rendered"
+
+          collect_args=(--rendered "$rendered" --leg source
+            --env-regex "$IMAGE_ENV_REGEX"
+            --own-prefix "ghcr.io/${REPOSITORY,,}/")
+          while IFS= read -r p; do collect_args+=(--first-party-prefix "$p"); done < <(lines "$FIRST_PARTY_PREFIXES")
+          while IFS= read -r i; do collect_args+=(--extra-image "$i"); done < <(lines "$EXTRA_IMAGES")
+          matrix="$(python3 _dot-github/.github/scripts/collect_chart_images.py "${collect_args[@]}")"
+
+          # json.dumps prints one line, so the output needs no delimiter.
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Images collected (source)"
+            echo
+            echo "| Image | Origin | Own latest |"
+            echo "| --- | --- | --- |"
+            jq -r '.include[] | [.ref, .origin, (."own-floating" | tostring)]
+              | map(gsub("\\|"; "\\|")) | "| " + join(" | ") + " |"' <<< "$matrix"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  scan:
+    name: Scan ${{ matrix.ref }}
+    needs: [trivy-db, collect]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.collect.outputs.matrix) }}
+    steps:
+      # First-party images use the caller's ignore file. Third-party images
+      # get no exceptions, so they need no caller checkout.
+      - name: Checkout
+        if: ${{ matrix.origin == 'first-party' }}
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Check out the reusable workflow's repo (for the trivy-scan action)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: _dot-github
+
+      # fail-on-findings is "false" for third-party images (until the
+      # freshness rule lands) and for the calling repo's own latest images
+      # on pull_request (row 66); "true" for everything else. The DBs come
+      # from the cache the trivy-db job saved, under its key.
+      - name: Scan
+        id: scan
+        uses: ./_dot-github/.github/actions/trivy-scan
+        with:
+          image-ref: ${{ matrix.ref }}
+          ignorefile: ${{ matrix.origin == 'first-party' && inputs.ignorefile || '' }}
+          fail-on-findings: ${{ (matrix.origin != 'first-party' || (github.event_name == 'pull_request' && matrix.own-floating)) && 'false' || 'true' }}
+          sarif-file: ${{ runner.temp }}/trivy.sarif
+          title: ${{ matrix.ref }} (${{ matrix.origin }})
+          cache-key: ${{ needs.trivy-db.outputs.cache-key }}
+
+      # Runs after a failed Scan step too, so a first-party image with
+      # findings still reaches the Security tab. Skipped on pull requests
+      # from forks, which get a read-only token, and when the scan errored
+      # (no SARIF was written).
+      - name: Upload SARIF
+        if: >-
+          ${{ !cancelled()
+          && (steps.scan.outputs.result == 'clean' || steps.scan.outputs.result == 'findings')
+          && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          sarif_file: ${{ runner.temp }}/trivy.sarif
+          category: trivy/source/${{ matrix.slug }}
+
+      # PLACEHOLDER (Task 16, row 41): the third-party freshness rule goes
+      # here. With findings, list the repository's tags and the pinned tag's
+      # current digest, run check_image_freshness.py, and fail the job when a
+      # newer release on the image's line or a newer digest exists. Until
+      # then, third-party findings are reported only.
+      - name: Third-party freshness check (not implemented yet)
+        if: ${{ matrix.origin == 'third-party' && steps.scan.outputs.result == 'findings' }}
+        run: echo "Freshness rule not implemented yet; third-party findings are reported only."
+
+      # An errored scan always fails the job. With fail-on-findings "true"
+      # the Scan step has already failed it; this catches the "false" cases
+      # (third-party images, and own latest images on pull_request), where
+      # trivy-scan turns an error into a warning and exits 0.
+      - name: Fail on a scan error
+        if: ${{ steps.scan.outputs.result == 'error' }}
+        run: |
+          echo "::error::The scan of this image did not complete; see the job summary."
+          exit 1

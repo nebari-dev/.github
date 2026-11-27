@@ -37,11 +37,22 @@ inputs:
     description: "Job summary heading. Defaults to the scan target."
     required: false
     default: ""
+  warm-only:
+    description: "\"true\": install Trivy and restore or download the Trivy DBs into the run's cache, then stop without scanning. image-ref, input, findings-file and baseline must be empty. result is clean when the DBs are ready, else error. Lets a workflow fetch the DBs once in one job so its scan jobs restore them from the cache."
+    required: false
+    default: "false"
+  cache-key:
+    description: "Trivy DB cache key to use instead of the one derived from the clock. Pass a warm-only run's cache-key output so every job of a run uses the same key."
+    required: false
+    default: ""
 
 outputs:
   result:
     description: "clean, findings, or error (bad inputs, ignore-file lint problems, or Trivy could not run)."
     value: ${{ steps.report.outputs.result }}
+  cache-key:
+    description: "The Trivy DB cache key this run used."
+    value: ${{ steps.validate.outputs.cache-key }}
 
 runs:
   using: composite
@@ -57,10 +68,16 @@ runs:
         INPUT: ${{ inputs.input }}
         FINDINGS_FILE: ${{ inputs.findings-file }}
         BASELINE: ${{ inputs.baseline }}
+        WARM_ONLY: ${{ inputs.warm-only }}
+        CACHE_KEY: ${{ inputs.cache-key }}
       run: |
         set -euo pipefail
         err=""
-        if [[ -n "$IMAGE_REF" && -n "$INPUT" ]] || [[ -z "$IMAGE_REF" && -z "$INPUT" ]]; then
+        if [[ "$WARM_ONLY" == "true" ]]; then
+          if [[ -n "$IMAGE_REF" || -n "$INPUT" || -n "$FINDINGS_FILE" || -n "$BASELINE" ]]; then
+            err="warm-only takes no image-ref, input, findings-file or baseline"
+          fi
+        elif [[ -n "$IMAGE_REF" && -n "$INPUT" ]] || [[ -z "$IMAGE_REF" && -z "$INPUT" ]]; then
           err="exactly one of image-ref and input must be set"
         elif [[ -n "$FINDINGS_FILE" ]]; then
           err="findings-file is not implemented yet"
@@ -69,10 +86,14 @@ runs:
           err="baseline is not implemented yet"
           echo "::error::trivy-scan: $err"
         fi
-        # Trivy DB cache key: one slot per 6 hours, UTC (PD7).
-        read -r day hour < <(date -u '+%F %H')
+        # Trivy DB cache key: one slot per 6 hours, UTC (PD7), unless the
+        # caller passes the key an earlier job of the run used.
+        if [[ -z "$CACHE_KEY" ]]; then
+          read -r day hour < <(date -u '+%F %H')
+          CACHE_KEY="trivy-db-v0.76.2-${day}-$(( 10#$hour / 6 ))"
+        fi
         {
-          echo "cache-key=trivy-db-v0.76.2-${day}-$(( 10#$hour / 6 ))"
+          echo "cache-key=$CACHE_KEY"
           if [[ -n "$err" ]]; then
             echo "ok=false"
             echo "error=$err"
@@ -161,7 +182,7 @@ runs:
 
     - name: Lint ignore file
       id: lint
-      if: ${{ steps.db.outputs.ok == 'true' }}
+      if: ${{ steps.db.outputs.ok == 'true' && inputs.warm-only != 'true' }}
       shell: bash
       env:
         IGNOREFILE: ${{ inputs.ignorefile }}
@@ -271,6 +292,8 @@ runs:
         SCAN_OK: ${{ steps.scan.outputs.ok }}
         COUNT: ${{ steps.scan.outputs.count }}
         JSON: ${{ steps.scan.outputs.json }}
+        WARM_ONLY: ${{ inputs.warm-only }}
+        DB_OK: ${{ steps.db.outputs.ok }}
       run: |
         set -uo pipefail
         err=""
@@ -279,6 +302,13 @@ runs:
         done
         if [[ -n "$err" ]]; then
           result=error
+        elif [[ "$WARM_ONLY" == "true" ]]; then
+          if [[ "$DB_OK" == "true" ]]; then
+            result=clean
+          else
+            result=error
+            err="the Trivy DBs are not ready (an earlier step failed)"
+          fi
         elif [[ "$SCAN_OK" != "true" ]]; then
           result=error
           err="the scan did not run (an earlier step failed)"
@@ -288,6 +318,12 @@ runs:
           result=clean
         fi
         echo "result=$result" >> "$GITHUB_OUTPUT"
+
+        # warm-only scans nothing, so a success has nothing to report.
+        if [[ "$WARM_ONLY" == "true" && "$result" == "clean" ]]; then
+          echo "Trivy DBs ready."
+          exit 0
+        fi
 
         {
           echo "### ${TITLE}"
