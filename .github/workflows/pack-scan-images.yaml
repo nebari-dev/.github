@@ -310,11 +310,16 @@ jobs:
               skopeo inspect --raw "docker://${repo}:${tag}" > "$manifest" && [[ -s "$manifest" ]]
             }
             retry fetch_manifest || cannot "could not read the digest of ${repo}:${tag}"
-            check_args+=(--tag-digest "sha256:$(sha256sum < "$manifest" | cut -d' ' -f1)")
+            digest="$(sha256sum < "$manifest" | cut -d' ' -f1)" \
+              || cannot "could not hash the manifest of ${repo}:${tag}"
+            check_args+=(--tag-digest "sha256:${digest}")
           fi
 
-          msg="$(python3 _dot-github/.github/scripts/check_image_freshness.py "${check_args[@]}")"
-          rc=$?
+          # The runner runs this with bash -e, so the status is captured in
+          # an || list; a bare assignment exiting 1 or 2 would end the step
+          # before the case below.
+          rc=0
+          msg="$(python3 _dot-github/.github/scripts/check_image_freshness.py "${check_args[@]}")" || rc=$?
           case "$rc" in
             0)
               echo "No newer release on this line; findings reported only."
