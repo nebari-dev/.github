@@ -26,11 +26,11 @@ inputs:
     required: false
     default: ""
   findings-file:
-    description: "Not implemented yet. Setting it gives result=error."
+    description: "When set, Trivy's JSON report (only fixable CRITICAL and HIGH findings) is also copied to this path after every scan that ran, including a clean one."
     required: false
     default: ""
   baseline:
-    description: "Not implemented yet. Setting it gives result=error."
+    description: "Path to an earlier JSON report (a findings-file). When set, only findings whose CVE and package are not in it give result=findings; the rest are listed as already on main and do not block. A baseline file that is missing or unreadable means every finding is new (fail closed), and the summary says so."
     required: false
     default: ""
   title:
@@ -79,12 +79,6 @@ runs:
           fi
         elif [[ -n "$IMAGE_REF" && -n "$INPUT" ]] || [[ -z "$IMAGE_REF" && -z "$INPUT" ]]; then
           err="exactly one of image-ref and input must be set"
-        elif [[ -n "$FINDINGS_FILE" ]]; then
-          err="findings-file is not implemented yet"
-          echo "::error::trivy-scan: $err"
-        elif [[ -n "$BASELINE" ]]; then
-          err="baseline is not implemented yet"
-          echo "::error::trivy-scan: $err"
         fi
         # Trivy DB cache key: one slot per 6 hours, UTC (PD7), unless the
         # caller passes the key an earlier job of the run used.
@@ -247,6 +241,9 @@ runs:
         INPUT: ${{ inputs.input }}
         IGNOREFILE: ${{ steps.lint.outputs.ignorefile }}
         SARIF_FILE: ${{ inputs.sarif-file }}
+        FINDINGS_FILE: ${{ inputs.findings-file }}
+        BASELINE: ${{ inputs.baseline }}
+        DIFF_SCRIPT: ${{ github.action_path }}/../../scripts/diff_findings.py
       run: |
         set -uo pipefail
         json="$RUNNER_TEMP/trivy.json"
@@ -274,6 +271,37 @@ runs:
           { echo "ok=false"; echo "error=could not convert the report to SARIF"; } >> "$GITHUB_OUTPUT"
           exit 0
         fi
+        if [[ -n "$FINDINGS_FILE" ]] && ! { mkdir -p "$(dirname -- "$FINDINGS_FILE")" && cp -- "$json" "$FINDINGS_FILE"; }; then
+          { echo "ok=false"; echo "error=could not write the findings file"; } >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [[ -n "$BASELINE" ]]; then
+          # diff_findings.py prints one "<CVE> <package>" line per finding
+          # the baseline lacks and exits 1 when there is one. A missing or
+          # unreadable baseline makes every finding new and puts one warning
+          # on stderr, which is how baseline-read is told. Its output holds
+          # package names from the scanned image, so it goes to files that
+          # the Report step prints only inside a ::stop-commands:: block.
+          new="$RUNNER_TEMP/trivy-new.txt"
+          diff_log="$RUNNER_TEMP/trivy-diff.log"
+          rm -f "$new" "$diff_log"
+          # The shell runs with -e, so the status is captured in an || list.
+          rc=0
+          python3 "$DIFF_SCRIPT" --current "$json" --baseline "$BASELINE" > "$new" 2> "$diff_log" || rc=$?
+          # A crash also exits 1, but prints nothing on stdout.
+          if (( rc > 1 )) || { (( rc == 1 )) && [[ ! -s "$new" ]]; }; then
+            { echo "ok=false"; echo "error=could not compare the findings with the baseline (diff_findings.py exit $rc)"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -s "$diff_log" ]]; then baseline_read=false; else baseline_read=true; fi
+          new_count="$(grep -c '' "$new" || true)"
+          {
+            echo "baseline-read=$baseline_read"
+            echo "new-count=$new_count"
+            echo "new=$new"
+            echo "diff-log=$diff_log"
+          } >> "$GITHUB_OUTPUT"
+        fi
         { echo "ok=true"; echo "count=$count"; echo "json=$json"; } >> "$GITHUB_OUTPUT"
 
     - name: Report
@@ -292,6 +320,11 @@ runs:
         SCAN_OK: ${{ steps.scan.outputs.ok }}
         COUNT: ${{ steps.scan.outputs.count }}
         JSON: ${{ steps.scan.outputs.json }}
+        BASELINE: ${{ inputs.baseline }}
+        BASELINE_READ: ${{ steps.scan.outputs.baseline-read }}
+        NEW_COUNT: ${{ steps.scan.outputs.new-count }}
+        NEW_FILE: ${{ steps.scan.outputs.new }}
+        DIFF_LOG: ${{ steps.scan.outputs.diff-log }}
         WARM_ONLY: ${{ inputs.warm-only }}
         DB_OK: ${{ steps.db.outputs.ok }}
       run: |
@@ -312,6 +345,9 @@ runs:
         elif [[ "$SCAN_OK" != "true" ]]; then
           result=error
           err="the scan did not run (an earlier step failed)"
+        elif [[ -n "$BASELINE" ]]; then
+          # With a baseline only findings it lacks block (diff_findings.py).
+          if (( NEW_COUNT > 0 )); then result=findings; else result=clean; fi
         elif (( COUNT > 0 )); then
           result=findings
         else
@@ -325,22 +361,67 @@ runs:
           exit 0
         fi
 
+        # With a baseline that was compared, each finding is new when its
+        # "<CVE> <package>" line is in diff_findings.py's output. A package
+        # name holding a newline cannot match a line, so it counts as new
+        # here too; the gate itself is diff_findings.py's exit code.
+        compared=false
+        if [[ "$result" != "error" && -n "$BASELINE" ]]; then compared=true; fi
+        tag_new='[.Results[]?.Vulnerabilities[]?]
+          | (($new | split("\n") | map(select(. != "") | {key: ., value: true}) | from_entries)) as $set
+          | map(. + {new: ((.VulnerabilityID + " " + .PkgName) as $k | ($set[$k] // false) or ($k | contains("\n")))})'
+        # Findings table rows; $want selects new (true) or existing (false).
+        # The shell runs with -e, so a jq failure falls back to a row
+        # instead of ending the step.
+        rows() {
+          jq -r --rawfile new "$NEW_FILE" --argjson want "$1" "$tag_new"'
+            | map(select(.new == $want))
+            | sort_by(.Severity != "CRITICAL", .VulnerabilityID, .PkgName)[]
+            | [.VulnerabilityID, .PkgName, .InstalledVersion, .FixedVersion, .Severity]
+            | map(tostring | gsub("\\|"; "\\|"))
+            | "| " + join(" | ") + " |"' "$JSON" \
+            || echo "| (could not list the findings) | | | | |"
+        }
+        # Counted from the tagged findings, so the numbers match the tables.
+        existing_count=0
+        new_shown="$NEW_COUNT"
+        if [[ "$compared" == "true" ]]; then
+          existing_count="$(jq --rawfile new "$NEW_FILE" "$tag_new"' | map(select(.new | not)) | length' "$JSON")" || existing_count="?"
+          new_shown="$(jq --rawfile new "$NEW_FILE" "$tag_new"' | map(select(.new)) | length' "$JSON")" || new_shown="$NEW_COUNT"
+        fi
+
         {
           echo "### ${TITLE}"
           echo
+          if [[ "$compared" == "true" && "$BASELINE_READ" != "true" ]]; then
+            echo "The baseline could not be read, so every finding is treated as new and blocks."
+            echo
+          fi
           case "$result" in
             clean)
-              echo "No fixable CRITICAL or HIGH vulnerabilities." ;;
+              if [[ "$compared" == "true" ]]; then
+                echo "No new fixable CRITICAL or HIGH vulnerabilities."
+              else
+                echo "No fixable CRITICAL or HIGH vulnerabilities."
+              fi ;;
             findings)
-              echo "$COUNT fixable CRITICAL or HIGH vulnerabilities."
-              echo
-              echo "| CVE | Package | Installed | Fixed | Severity |"
-              echo "| --- | --- | --- | --- | --- |"
-              jq -r '[.Results[]?.Vulnerabilities[]?]
-                | sort_by(.Severity != "CRITICAL", .VulnerabilityID, .PkgName)[]
-                | [.VulnerabilityID, .PkgName, .InstalledVersion, .FixedVersion, .Severity]
-                | map(tostring | gsub("\\|"; "\\|"))
-                | "| " + join(" | ") + " |"' "$JSON" ;;
+              if [[ "$compared" == "true" ]]; then
+                echo "$new_shown new fixable CRITICAL or HIGH vulnerabilities (not in the baseline)."
+                echo
+                echo "| CVE | Package | Installed | Fixed | Severity |"
+                echo "| --- | --- | --- | --- | --- |"
+                rows true
+              else
+                echo "$COUNT fixable CRITICAL or HIGH vulnerabilities."
+                echo
+                echo "| CVE | Package | Installed | Fixed | Severity |"
+                echo "| --- | --- | --- | --- | --- |"
+                jq -r '[.Results[]?.Vulnerabilities[]?]
+                  | sort_by(.Severity != "CRITICAL", .VulnerabilityID, .PkgName)[]
+                  | [.VulnerabilityID, .PkgName, .InstalledVersion, .FixedVersion, .Severity]
+                  | map(tostring | gsub("\\|"; "\\|"))
+                  | "| " + join(" | ") + " |"' "$JSON"
+              fi ;;
             error)
               echo "Scan error: ${err}"
               if [[ -n "$LINT_PROBLEMS" ]]; then
@@ -355,18 +436,41 @@ runs:
                 echo "$fence"
               fi ;;
           esac
+          if [[ "$compared" == "true" && "$existing_count" != "0" ]]; then
+            echo
+            echo "#### Already on main"
+            echo
+            echo "$existing_count findings are also in the baseline from main's latest scheduled scan and do not block."
+            echo
+            echo "| CVE | Package | Installed | Fixed | Severity |"
+            echo "| --- | --- | --- | --- | --- |"
+            rows false
+          fi
           echo
         } >> "$GITHUB_STEP_SUMMARY"
 
-        # Lint problems come from the PR-controlled ignore file and package
-        # names from the scanned image, so both are printed with workflow
-        # commands turned off. The final ::warning::/::error:: stays outside.
-        if [[ "$result" == "findings" || -n "$LINT_PROBLEMS" ]]; then
+        # Lint problems come from the PR-controlled ignore file, and package
+        # names (and so diff_findings.py's output) from the scanned image, so
+        # all of them are printed with workflow commands turned off. The
+        # final ::warning::/::error:: stays outside.
+        list_findings=false
+        if [[ "$result" == "findings" || ( "$compared" == "true" && ( "$existing_count" != "0" || "$BASELINE_READ" != "true" ) ) ]]; then
+          list_findings=true
+        fi
+        if [[ "$list_findings" == "true" || -n "$LINT_PROBLEMS" ]]; then
           token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
           echo "::stop-commands::${token}"
           # Any exit inside the block still turns commands back on.
           trap 'echo "::${token}::"' EXIT
-          if [[ "$result" == "findings" ]]; then
+          if [[ "$list_findings" == "true" && "$compared" == "true" ]]; then
+            if [[ -s "$DIFF_LOG" ]]; then
+              cat -- "$DIFF_LOG"
+            fi
+            echo "Findings (new or already on main; CVE, package, installed -> fixed, severity):"
+            jq -r --rawfile new "$NEW_FILE" "$tag_new"'[]
+              | "  \(if .new then "new     " else "existing" end) \(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion) \(.Severity)"' "$JSON" \
+              || echo "  (could not list the findings; see the job summary)"
+          elif [[ "$list_findings" == "true" ]]; then
             echo "Findings (CVE, package, installed -> fixed, severity):"
             jq -r '.Results[]?.Vulnerabilities[]?
               | "  \(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion) \(.Severity)"' "$JSON" \
@@ -382,10 +486,17 @@ runs:
 
         case "$result" in
           clean) msg="" ;;
-          findings) msg="${TITLE}: $COUNT fixable CRITICAL or HIGH vulnerabilities (see the job summary)" ;;
+          findings)
+            if [[ "$compared" == "true" ]]; then
+              msg="${TITLE}: $new_shown new fixable CRITICAL or HIGH vulnerabilities (see the job summary)"
+            else
+              msg="${TITLE}: $COUNT fixable CRITICAL or HIGH vulnerabilities (see the job summary)"
+            fi ;;
           *) msg="${TITLE}: scan error: ${err}" ;;
         esac
-        if [[ "$result" == "clean" ]]; then
+        if [[ "$result" == "clean" && "$compared" == "true" ]]; then
+          echo "${TITLE}: no new findings."
+        elif [[ "$result" == "clean" ]]; then
           echo "${TITLE}: clean."
         elif [[ "$FAIL_ON_FINDINGS" == "false" ]]; then
           echo "::warning::${msg}"

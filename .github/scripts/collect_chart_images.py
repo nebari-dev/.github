@@ -49,9 +49,6 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
-from ruamel.yaml import YAML
-from ruamel.yaml.error import YAMLError
-
 CONTAINER_LISTS = ("containers", "initContainers", "ephemeralContainers")
 DEFAULT_ENV_REGEX = r"_IMAGE$"
 FLOATING_TAG = "latest"
@@ -244,6 +241,11 @@ def main(argv: Sequence[str]) -> int:
             file=sys.stderr,
         )
         return 2
+
+    # Imported here, not at the top, so --slug needs only the standard
+    # library: pack-build-image.yaml runs it with the runner's python3.
+    from ruamel.yaml import YAML
+    from ruamel.yaml.error import YAMLError
 
     try:
         with open(args.rendered, encoding="utf-8") as f:
